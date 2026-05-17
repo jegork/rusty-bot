@@ -52,6 +52,19 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("Severity-inflated findings");
   });
 
+  it("frames linked tickets as context (not a per-PR checklist) at the system level", () => {
+    const prompt = buildSystemPrompt(baseConfig);
+    // system-level guidance matches the user-message-level ticket section so
+    // there's a single consistent rule whether or not tickets are linked in a given PR
+    expect(prompt).toContain("Linked tickets are CONTEXT");
+    expect(prompt).toContain("not a per-PR checklist");
+    expect(prompt).toContain("one slice of a larger ticket");
+    expect(prompt).toContain("contradicts or breaks a requirement");
+    // pin the regression phrase: the system prompt must explicitly forbid the
+    // "fails to include …" framing that caused the rusty-gantry false complaint
+    expect(prompt).toContain("fails to include");
+  });
+
   it("includes anti-meta-narrative summary rules and the failure-mode phrases to avoid", () => {
     const prompt = buildSystemPrompt(baseConfig);
     expect(prompt).toContain("Summary writing rules");
@@ -234,11 +247,39 @@ describe("buildUserMessage", () => {
     expect(msg).toContain("Implement JWT authentication");
     expect(msg).toContain("Acceptance Criteria");
     expect(msg).toContain("feature, auth");
-    expect(msg).toContain("structured ticketCompliance output");
-    expect(msg).toContain(
-      "use `not_addressed` only when the visible changes clearly do not satisfy the requirement",
-    );
-    expect(msg).toContain("use `unclear`");
+    expect(msg).toContain("structured `ticketCompliance` output");
+    // pin the four-grade rubric so future prompt edits don't accidentally collapse it
+    expect(msg).toContain("`addressed`");
+    expect(msg).toContain("`partially_addressed`");
+    expect(msg).toContain("`not_addressed`");
+    expect(msg).toContain("`unclear`");
+  });
+
+  it("frames linked tickets as context, not a per-PR checklist (closes the 'fails to include' false-flag class)", () => {
+    const tickets: TicketInfo[] = [
+      {
+        id: "AUTH-42",
+        title: "Stop button for the live viewer",
+        description: "Add a Stop button users can click to halt playback.",
+        labels: [],
+        source: "jira",
+      },
+    ];
+    const msg = buildUserMessage("diff", prMetadata, tickets);
+    // tickets are CONTEXT, not a checklist
+    expect(msg).toContain("CONTEXT for this PR");
+    expect(msg).toContain("NOT a checklist");
+    expect(msg).toContain("one slice of a larger ticket");
+    // tighten not_addressed semantics — only when the diff CONTRADICTS the requirement
+    expect(msg).toContain("CONTRADICTS or BREAKS");
+    // unclear is the default for silent diffs (no positive or negative evidence)
+    expect(msg).toContain("default when this PR's diff is silent");
+    // pin the exact failure-mode phrase from the rusty-gantry version-bump regression
+    expect(msg).toContain("fails to include");
+    // explicit cross-reference to the filesReviewed carry-forward from PR #187 —
+    // when the prior review's coverage list is present, requirements in those files
+    // were already evaluated and must not get re-flagged as not_addressed here
+    expect(msg).toContain("Files already covered by the prior review");
   });
 
   it("omits ticket section when no tickets provided", () => {

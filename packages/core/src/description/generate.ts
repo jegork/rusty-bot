@@ -39,9 +39,18 @@ function stripBotMarker(description: string): string {
   return description.replace(DESCRIPTION_MARKER, "").trim();
 }
 
+export interface FormatDescriptionOptions {
+  /** when true, the model has already folded the previous description into its
+   * output → skip the <details>"Original description" wrap so we don't end up
+   * with the same content rendered twice (and the wrap itself accumulating
+   * one extra nesting level on every incremental re-review). */
+  incremental?: boolean;
+}
+
 export function formatDescription(
   output: PRDescriptionOutput,
   originalDescription?: string,
+  options?: FormatDescriptionOptions,
 ): string {
   const lines: string[] = [DESCRIPTION_MARKER, ""];
 
@@ -79,7 +88,12 @@ export function formatDescription(
     lines.push("");
   }
 
-  const stripped = originalDescription ? stripBotMarker(originalDescription) : "";
+  // augment mode skips the wrap entirely: the model's output already merged the
+  // prior description's content, so re-attaching it would duplicate everything
+  // AND keep growing one nested <details> deeper on every incremental push.
+  const skipOriginalWrap = options?.incremental === true;
+  const stripped =
+    !skipOriginalWrap && originalDescription ? stripBotMarker(originalDescription) : "";
   if (stripped.length > 0) {
     lines.push("<details>");
     lines.push("<summary>Original description</summary>");
@@ -93,10 +107,19 @@ export function formatDescription(
   return lines.join("\n");
 }
 
+export interface GeneratePRDescriptionOptions {
+  /** when true, the patches above represent ONLY the diff since the existing
+   * description was generated. The generator runs in augment-in-place mode and
+   * skips the <details>"Original description" wrap on output. Only meaningful
+   * when an existingDescription is provided. */
+  incremental?: boolean;
+}
+
 export async function generatePRDescription(
   patches: FilePatch[],
   prMetadata: PRMetadata,
   existingDescription?: string,
+  options?: GeneratePRDescriptionOptions,
 ): Promise<GenerateDescriptionResult> {
   const { compressed } = compressDiff(patches, MAX_DESCRIPTION_TOKENS);
 
@@ -110,7 +133,10 @@ export async function generatePRDescription(
     model: () => resolveModel(modelConfig),
   });
 
-  const userMessage = buildDescriptionUserMessage(compressed, prMetadata, existingDescription);
+  const incremental = options?.incremental === true;
+  const userMessage = buildDescriptionUserMessage(compressed, prMetadata, existingDescription, {
+    incremental,
+  });
 
   const modelSettings = applyModelConstraints(modelConfig, resolveModelSettings("description"));
   const jsonPromptInjection = resolveJsonPromptInjection(modelConfig);
@@ -123,7 +149,7 @@ export async function generatePRDescription(
   const tokenCount = response.usage.totalTokens ?? 0;
 
   return {
-    markdown: formatDescription(parsed, existingDescription),
+    markdown: formatDescription(parsed, existingDescription, { incremental }),
     modelUsed: modelName,
     tokenCount,
   };

@@ -319,7 +319,9 @@ export async function runAction(config: ActionConfig): Promise<number> {
   if (config.generateDescription) {
     try {
       if (shouldGenerateDescription(metadata.description)) {
-        const descResult = await generatePRDescription(reviewable, metadata, metadata.description);
+        const descResult = await generatePRDescription(reviewable, metadata, metadata.description, {
+          incremental: incrementalUsed,
+        });
         await provider.updatePRDescription(descResult.markdown);
         metadata.description = descResult.markdown;
         log.info(

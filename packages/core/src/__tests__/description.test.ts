@@ -304,6 +304,41 @@ describe("formatDescription", () => {
     });
     expect(result).not.toContain("Original description");
   });
+
+  it("skips the Original description wrap in augment (incremental) mode even when prior text is provided", () => {
+    const botGenerated =
+      "<!-- rusty-bot-description -->\n\n## Summary\nCovers Stop button + Vitest.";
+    const result = formatDescription(
+      {
+        summary: "Now also bumps the version to 0.4.0.",
+        fileChanges: [],
+        breakingChanges: [],
+        migrationNotes: null,
+      },
+      botGenerated,
+      { incremental: true },
+    );
+    // augmented model output replaces the prior description in-place; re-wrapping
+    // it would double-render the content and accumulate one extra nesting per
+    // incremental push
+    expect(result).not.toContain("Original description");
+    expect(result).not.toContain("Covers Stop button + Vitest.");
+  });
+
+  it("falls back to wrapping in Original description when incremental is false (explicit)", () => {
+    const result = formatDescription(
+      {
+        summary: "Updated.",
+        fileChanges: [],
+        breakingChanges: [],
+        migrationNotes: null,
+      },
+      "user-written prior",
+      { incremental: false },
+    );
+    expect(result).toContain("Original description");
+    expect(result).toContain("user-written prior");
+  });
 });
 
 describe("buildDescriptionUserMessage", () => {
@@ -341,5 +376,37 @@ describe("buildDescriptionUserMessage", () => {
   it("omits existing description section when undefined", () => {
     const msg = buildDescriptionUserMessage("diff", prMetadata);
     expect(msg).not.toContain("Existing Description");
+  });
+
+  it("switches to augment mode when incremental=true and existing description is present", () => {
+    const existing = "<!-- rusty-bot-description -->\n\n## Summary\nCovers Stop button + Vitest.";
+    const msg = buildDescriptionUserMessage("+ version bump diff", prMetadata, existing, {
+      incremental: true,
+    });
+    // augment-mode-specific headings and instructions
+    expect(msg).toContain("Description so far");
+    expect(msg).toContain("AUGMENT this description in place");
+    expect(msg).toContain("Do NOT rewrite from scratch");
+    expect(msg).toContain("New changes since the existing description");
+    // the prior description content is still embedded so the model can preserve it
+    expect(msg).toContain("Covers Stop button + Vitest.");
+    // the non-incremental headings/instructions must NOT appear (no mode bleed)
+    expect(msg).not.toContain("Existing Description");
+    expect(msg).not.toContain("## Diff");
+  });
+
+  it("falls back to non-augment mode when incremental=true but no existing description (degrade gracefully)", () => {
+    // there's nothing to augment, so the augment instructions would be meaningless
+    const msg = buildDescriptionUserMessage("+ diff", prMetadata, "", { incremental: true });
+    expect(msg).not.toContain("Description so far");
+    expect(msg).not.toContain("AUGMENT this description");
+    expect(msg).toContain("## Diff");
+  });
+
+  it("keeps the existing 'Existing Description' wording when incremental is omitted (backward compat)", () => {
+    const existing = "<!-- rusty-bot-description -->\n\nPrior content";
+    const msg = buildDescriptionUserMessage("diff", prMetadata, existing);
+    expect(msg).toContain("Existing Description");
+    expect(msg).not.toContain("Description so far");
   });
 });

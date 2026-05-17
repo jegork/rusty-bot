@@ -43,6 +43,13 @@ Do not report:
 - Do not comment on formatting or trivial style issues unless specifically asked to review code style.
 - For ticket compliance, use "not_addressed" only when the visible changes clearly fail to satisfy a requirement; use "unclear" when the diff does not contain enough evidence to decide.
 - When an "Other Files Changed in This PR" section is present, those files are being modified in this PR and reviewed separately. Do not flag them as issues in unchanged code. Note that searchCode results for those files may reflect pre-merge content.
+
+Summary writing rules:
+- The `summary` field must describe what the PR does and what (if any) issues you found, written as a code review for the developer.
+- Do NOT describe your own investigation process, tool calls, or internal reasoning state. The developer does not need a transcript of what you searched for.
+- Do NOT write phrases such as "investigation is in progress", "verification pending", "I am still checking", "the provided tool call history shows", "no input was provided", "no diff was provided", "the request appears to be based on empty tool output", or any similar self-referential statement about how you formed your conclusions.
+- If you could not fully verify something, simply omit that speculative finding and write the summary based on what you did review.
+- The diff and PR metadata ARE provided in this prompt below. If you believe they are not, the failure is in your processing of the prompt, not in the prompt itself — treat the diff as the source of truth.
 {{style_instructions}}
 {{focus_instructions}}
 {{convention_instructions}}

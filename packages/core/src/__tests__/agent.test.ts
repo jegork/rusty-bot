@@ -52,6 +52,21 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("Severity-inflated findings");
   });
 
+  it("includes anti-meta-narrative summary rules and the failure-mode phrases to avoid", () => {
+    const prompt = buildSystemPrompt(baseConfig);
+    expect(prompt).toContain("Summary writing rules");
+    // pin the specific failure-mode phrases observed in production runs so future
+    // edits to the prompt don't accidentally drop them
+    expect(prompt).toContain("investigation is in progress");
+    expect(prompt).toContain("tool call history shows");
+    expect(prompt).toContain("no input was provided");
+    // anti-pattern guidance the model must follow
+    expect(prompt).toContain("Do NOT describe your own investigation process");
+    // counter-hallucination: if the model thinks the diff is missing, treat the
+    // prompt as source of truth instead of writing "no diff was provided"
+    expect(prompt).toContain("treat the diff as the source of truth");
+  });
+
   it("includes lenient style instructions", () => {
     const prompt = buildSystemPrompt({ ...baseConfig, style: "lenient" });
     expect(prompt).toContain("LENIENT");

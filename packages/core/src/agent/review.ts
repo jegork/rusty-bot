@@ -87,25 +87,6 @@ function readMaxTransientRetries(): number {
   return Math.min(Math.floor(n), TRANSIENT_RETRY_BACKOFF_MS.length);
 }
 
-// addendum to the system prompt for the FINAL allowed step. fires together with
-// `toolChoice="none"` + `activeTools: []`. without it, tool-happy models that
-// burned their step budget on verification searches (deepseek-v4-flash on
-// Ollama Cloud, deepseek-v4-pro on Fireworks) emit structured output whose
-// `summary` field reports the model's own investigation state — e.g. "Investigation
-// is currently in progress to verify integration with X and Y" — instead of an
-// actual review summary. the reminder pins the model to the developer-facing
-// review voice for the final emission.
-const FINAL_STEP_PROMPT_ADDENDUM = [
-  "",
-  "## FINAL STEP",
-  "",
-  "Your tool budget is now exhausted. Emit your final structured review based on the investigation already in your message history.",
-  "",
-  'The `summary` field must read as a code review for the developer: describe what the PR does and any concrete issues you found. Do NOT describe your own investigation process. Do NOT write phrases like "investigation is in progress", "verification pending", "I am still checking", or similar — your investigation is over.',
-  "",
-  "If you could not fully verify something, omit that speculative finding. Do not include findings you are unsure about.",
-].join("\n");
-
 // caps how many tool-use rounds an agent can run before mastra forces it to
 // produce a final answer. unset = mastra's default. matters most for Anthropic
 // models, which can otherwise fan out parallel tool calls indefinitely and
@@ -419,18 +400,16 @@ export async function runReview(
   // otherwise tool-happy models (Anthropic in particular) burn the whole budget
   // on tool calls and end with finishReason="tool-calls" and no text — which
   // produces no structured output and the pass fails. stripping tools on the
-  // last allowed step guarantees the model emits a final answer. the system
-  // override pins the prose voice so the model doesn't emit its own investigation
-  // state as the summary (see FINAL_STEP_PROMPT_ADDENDUM comment).
+  // last allowed step guarantees the model emits a final answer. the anti-meta-
+  // narrative rules that prevent "investigation is in progress" / "no input was
+  // provided" summaries live in the base system prompt (see prompts/base.txt)
+  // so they apply at every step, not just the forced-termination one — the
+  // failure mode also fires when the model stops voluntarily.
   const prepareStep =
     maxSteps !== undefined
       ? ({ stepNumber }: { stepNumber: number }) => {
           if (stepNumber >= maxSteps - 1) {
-            return {
-              toolChoice: "none" as const,
-              activeTools: [],
-              system: `${systemPrompt}${FINAL_STEP_PROMPT_ADDENDUM}`,
-            };
+            return { toolChoice: "none" as const, activeTools: [] };
           }
         }
       : undefined;

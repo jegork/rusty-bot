@@ -608,11 +608,11 @@ describe("RUSTY_LLM_MAX_STEPS", () => {
 
     const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
     const prepareStep = opts.prepareStep as (a: { stepNumber: number }) => unknown;
-    expect(prepareStep({ stepNumber: 4 })).toMatchObject({ toolChoice: "none", activeTools: [] });
-    expect(prepareStep({ stepNumber: 99 })).toMatchObject({ toolChoice: "none", activeTools: [] });
+    expect(prepareStep({ stepNumber: 4 })).toEqual({ toolChoice: "none", activeTools: [] });
+    expect(prepareStep({ stepNumber: 99 })).toEqual({ toolChoice: "none", activeTools: [] });
   });
 
-  it("prepareStep injects a final-step system addendum to pin review voice", async () => {
+  it("prepareStep does NOT override the system prompt — the anti-meta-narrative rules live in base.txt so they apply at every step (not just the forced-termination one)", async () => {
     process.env.RUSTY_LLM_MAX_STEPS = "5";
     generateMock.mockResolvedValueOnce(makeValidResponse());
 
@@ -621,16 +621,8 @@ describe("RUSTY_LLM_MAX_STEPS", () => {
     const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
     const prepareStep = opts.prepareStep as (a: { stepNumber: number }) => unknown;
 
-    // non-final steps return undefined → use the agent's default system prompt
     expect(prepareStep({ stepNumber: 0 })).toBeUndefined();
-
-    // final step replaces the system prompt with one that includes the addendum
-    const finalResult = prepareStep({ stepNumber: 4 }) as { system: string };
-    expect(typeof finalResult.system).toBe("string");
-    expect(finalResult.system).toContain("FINAL STEP");
-    expect(finalResult.system).toContain("tool budget");
-    // pins the failure mode this addendum exists to prevent
-    expect(finalResult.system).toContain("investigation is in progress");
+    expect(prepareStep({ stepNumber: 4 })).not.toHaveProperty("system");
   });
 
   it("prepareStep with maxSteps=1 forces tool-free mode on step 0 (the only step)", async () => {
@@ -641,7 +633,7 @@ describe("RUSTY_LLM_MAX_STEPS", () => {
 
     const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
     const prepareStep = opts.prepareStep as (a: { stepNumber: number }) => unknown;
-    expect(prepareStep({ stepNumber: 0 })).toMatchObject({ toolChoice: "none", activeTools: [] });
+    expect(prepareStep({ stepNumber: 0 })).toEqual({ toolChoice: "none", activeTools: [] });
   });
 
   it("floors fractional values", async () => {

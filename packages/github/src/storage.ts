@@ -66,6 +66,29 @@ async function saveData(data: StorageData): Promise<void> {
   await writeFile(DATA_FILE, JSON.stringify(data, null, 2), "utf-8");
 }
 
+// serialize all writes through a promise chain — every mutating storage call
+// follows a load→mutate→save pattern that isn't atomic. without this, two
+// reviews completing roughly simultaneously can both read the same `data`,
+// each apply their mutation in memory, and the second `saveData` wins —
+// clobbering the first review's record entirely.
+//
+// this is a band-aid on the JSON-file storage choice. atomic row-level writes
+// would eliminate the need for the lock; see FOLLOWUPS.md for the migration
+// note. shipping the band-aid because the race is observable today and the
+// migration is a separate, larger piece of work.
+let writeQueue: Promise<unknown> = Promise.resolve();
+
+function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  const next = writeQueue.then(fn, fn);
+  // keep the chain unbroken even when fn rejects — otherwise an error in one
+  // caller would break serialization for the next
+  writeQueue = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
 export async function getRepoConfig(owner: string, repo: string): Promise<RepoConfig | null> {
   const data = await loadData();
   return data.configs[makeConfigKey(owner, repo)] ?? null;
@@ -76,9 +99,11 @@ export async function setRepoConfig(
   repo: string,
   config: RepoConfig,
 ): Promise<void> {
-  const data = await loadData();
-  data.configs[makeConfigKey(owner, repo)] = config;
-  await saveData(data);
+  await withWriteLock(async () => {
+    const data = await loadData();
+    data.configs[makeConfigKey(owner, repo)] = config;
+    await saveData(data);
+  });
 }
 
 export async function listRepoConfigs(): Promise<RepoConfigWithId[]> {
@@ -87,10 +112,12 @@ export async function listRepoConfigs(): Promise<RepoConfigWithId[]> {
 }
 
 export async function saveReview(review: ReviewRecord): Promise<string> {
-  const data = await loadData();
-  data.reviews.push(review);
-  await saveData(data);
-  return review.id;
+  return withWriteLock(async () => {
+    const data = await loadData();
+    data.reviews.push(review);
+    await saveData(data);
+    return review.id;
+  });
 }
 
 export async function listReviews(limit = 50, offset = 0): Promise<ReviewRecord[]> {
@@ -123,9 +150,11 @@ export async function getSetting(key: string): Promise<string | null> {
 }
 
 export async function setSetting(key: string, value: string): Promise<void> {
-  const data = await loadData();
-  data.settings[key] = value;
-  await saveData(data);
+  await withWriteLock(async () => {
+    const data = await loadData();
+    data.settings[key] = value;
+    await saveData(data);
+  });
 }
 
 export async function getSettings(): Promise<Record<string, string>> {

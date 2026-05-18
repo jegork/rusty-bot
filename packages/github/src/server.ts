@@ -13,7 +13,7 @@ import {
   listRepoConfigs,
   getRepoConfig,
   setRepoConfig,
-  listReviews,
+  listReviewsPage,
   getReview,
   getSettings,
   setSetting,
@@ -121,6 +121,9 @@ app.put("/api/config/repos/:owner/:repo", async (c) => {
     focusAreas?: FocusArea[];
     ignorePatterns?: string[];
     generateDescription?: boolean;
+    renameTitleToConventional?: boolean;
+    consensusPasses?: number;
+    consensusThreshold?: number | null;
   } = await c.req.json();
 
   const parsedStyle = ReviewStyleSchema.safeParse(body.style);
@@ -128,15 +131,28 @@ app.put("/api/config/repos/:owner/:repo", async (c) => {
     return c.json({ error: `invalid review style: ${body.style}` }, 400);
   }
 
+  // carry forward existing optional fields not included in this request — PUT
+  // semantics here are PATCH-shaped in practice (clients update one field at a
+  // time), and the prior behavior of falling back to hard-coded defaults wiped
+  // out anything the user had previously set when omitted from the body
+  const existing = await getRepoConfig(owner, repo);
+
   const config: RepoConfig = {
+    ...(existing ?? {}),
     owner,
     repo,
-    style: parsedStyle.success ? parsedStyle.data : "balanced",
-    focusAreas: body.focusAreas ?? ["security", "performance", "bugs", "style", "tests", "docs"],
-    ignorePatterns: body.ignorePatterns ?? [],
-    ...(typeof body.generateDescription === "boolean" && {
-      generateDescription: body.generateDescription,
-    }),
+    style: parsedStyle.success ? parsedStyle.data : (existing?.style ?? "balanced"),
+    focusAreas: body.focusAreas ??
+      existing?.focusAreas ?? ["security", "performance", "bugs", "style", "tests", "docs"],
+    ignorePatterns: body.ignorePatterns ?? existing?.ignorePatterns ?? [],
+    ...(typeof body.generateDescription === "boolean"
+      ? { generateDescription: body.generateDescription }
+      : {}),
+    ...(typeof body.renameTitleToConventional === "boolean"
+      ? { renameTitleToConventional: body.renameTitleToConventional }
+      : {}),
+    ...(typeof body.consensusPasses === "number" ? { consensusPasses: body.consensusPasses } : {}),
+    ...("consensusThreshold" in body ? { consensusThreshold: body.consensusThreshold } : {}),
   };
 
   await setRepoConfig(owner, repo, config);
@@ -160,9 +176,8 @@ app.put("/api/config/settings", async (c) => {
 app.get("/api/reviews", async (c) => {
   const limit = Number(c.req.query("limit") ?? "50");
   const offset = Number(c.req.query("offset") ?? "0");
-  const allReviews = await listReviews(1000, 0);
-  const items = await listReviews(limit, offset);
-  return c.json({ items, total: allReviews.length });
+  const { items, total } = await listReviewsPage(limit, offset);
+  return c.json({ items, total });
 });
 
 app.get("/api/reviews/:id", async (c) => {

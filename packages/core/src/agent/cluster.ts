@@ -108,7 +108,10 @@ function clusterItems<T extends Clusterable>(
 }
 
 function pickRepresentative<T extends Clusterable>(items: T[]): T {
-  return items.sort((a, b) => {
+  // copy before sorting — Array.prototype.sort mutates in place, and `items`
+  // here is the caller's cluster.items.map() result whose ordering callers
+  // downstream may rely on
+  return [...items].sort((a, b) => {
     const sevDiff = SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity];
     if (sevDiff !== 0) return sevDiff;
     return b.message.length - a.message.length;

@@ -100,6 +100,18 @@ export async function listReviews(limit = 50, offset = 0): Promise<ReviewRecord[
   return sorted.slice(offset, offset + limit);
 }
 
+/** like listReviews but returns the total count alongside the page in a single
+ * file read — avoids the read-twice pattern callers were using when they
+ * needed both the items and the total for pagination metadata. */
+export async function listReviewsPage(
+  limit: number,
+  offset: number,
+): Promise<{ items: ReviewRecord[]; total: number }> {
+  const data = await loadData();
+  const sorted = [...data.reviews].reverse();
+  return { items: sorted.slice(offset, offset + limit), total: data.reviews.length };
+}
+
 export async function getReview(id: string): Promise<ReviewRecord | null> {
   const data = await loadData();
   return data.reviews.find((r) => r.id === id) ?? null;

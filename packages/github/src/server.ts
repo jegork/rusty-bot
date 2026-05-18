@@ -22,6 +22,42 @@ import {
 
 const log = logger.child({ package: "github" });
 
+// in-memory webhook delivery dedupe. github retries webhooks on timeout, and
+// a slow review dispatch would otherwise trigger a second full review for the
+// same delivery. NOTE: this set is per-process — multi-instance deployments
+// behind a load balancer need a shared-storage replacement (see FOLLOWUPS).
+const inFlightDeliveries = new Set<string>();
+
+// concurrency semaphore so a burst of webhooks doesn't exhaust the LLM rate
+// limit or OOM the node process. NOTE: also per-process — see FOLLOWUPS.
+const MAX_CONCURRENT_REVIEWS = (() => {
+  const raw = process.env.RUSTY_MAX_CONCURRENT_REVIEWS;
+  if (raw === undefined || raw === "") return 5;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 5;
+})();
+let activeReviews = 0;
+const reviewQueue: (() => void)[] = [];
+
+function acquireReviewSlot(): Promise<void> {
+  if (activeReviews < MAX_CONCURRENT_REVIEWS) {
+    activeReviews++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => reviewQueue.push(resolve));
+}
+
+function releaseReviewSlot(): void {
+  const next = reviewQueue.shift();
+  if (next) {
+    // hand the slot directly to the next waiter — keeps activeReviews stable
+    // at MAX_CONCURRENT_REVIEWS so we don't transiently exceed it
+    next();
+  } else {
+    activeReviews--;
+  }
+}
+
 export const app = new Hono();
 
 app.use("*", cors());
@@ -42,6 +78,7 @@ function redactSettings(settings: Record<string, string>): Record<string, string
 app.post("/api/webhooks/github", async (c) => {
   const secret = process.env.GITHUB_WEBHOOK_SECRET ?? "";
   const signature = c.req.header("x-hub-signature-256") ?? "";
+  const deliveryId = c.req.header("x-github-delivery") ?? "";
   const rawBody = await c.req.text();
 
   if (!validateWebhookSignature(rawBody, signature, secret)) {
@@ -78,6 +115,15 @@ app.post("/api/webhooks/github", async (c) => {
     return c.json({ ignored: true, reason: "bot PR" });
   }
 
+  // dedupe duplicate webhook deliveries (same X-GitHub-Delivery). github
+  // retries on timeout; returning 200 fast prevents most retries, but this
+  // guards the cases where the retry races our reply.
+  if (deliveryId && inFlightDeliveries.has(deliveryId)) {
+    log.info({ deliveryId }, "duplicate webhook delivery, ignoring");
+    return c.json({ ok: true, duplicate: true });
+  }
+  if (deliveryId) inFlightDeliveries.add(deliveryId);
+
   const installation = payload.installation as Record<string, unknown> | undefined;
   const installationId = Number(installation?.id);
   const repoData = payload.repository as Record<string, unknown>;
@@ -92,10 +138,24 @@ app.post("/api/webhooks/github", async (c) => {
     privateKey = await readFile(process.env.GITHUB_PRIVATE_KEY_PATH, "utf-8");
   }
 
-  // dispatch review async so we return 200 immediately
-  createAppOctokit(appId, privateKey, installationId)
-    .then((octokit) => orchestrateReview({ octokit, owner, repo, pullNumber, installationId }))
-    .catch((err: unknown) => log.error({ err }, "failed to dispatch review"));
+  // dispatch review async so we return 200 immediately; acquire a slot from
+  // the concurrency semaphore before starting so bursts don't OOM or get
+  // rate-limited by the LLM provider. release in finally so a thrown review
+  // doesn't leak the slot.
+  const runReview = async () => {
+    await acquireReviewSlot();
+    try {
+      const octokit = await createAppOctokit(appId, privateKey, installationId);
+      await orchestrateReview({ octokit, owner, repo, pullNumber, installationId });
+    } catch (err: unknown) {
+      log.error({ err }, "review failed");
+    } finally {
+      releaseReviewSlot();
+      if (deliveryId) inFlightDeliveries.delete(deliveryId);
+    }
+  };
+
+  runReview().catch((err: unknown) => log.error({ err }, "failed to dispatch review"));
 
   return c.json({ ok: true });
 });

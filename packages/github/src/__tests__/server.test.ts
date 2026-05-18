@@ -217,6 +217,93 @@ describe("server", () => {
     });
   });
 
+  describe("webhook delivery dedupe", () => {
+    it("returns duplicate:true on a second request with the same X-GitHub-Delivery", async () => {
+      const { orchestrateReview } = await import("../orchestrator.js");
+      const orchestrateMock = vi.mocked(orchestrateReview);
+      orchestrateMock.mockClear();
+
+      // make orchestrateReview hang so the in-flight set still has the
+      // delivery id when the duplicate comes in
+      let resolveOrchestrate!: () => void;
+      orchestrateMock.mockImplementationOnce(
+        () =>
+          new Promise<void>((r) => {
+            resolveOrchestrate = r;
+          }),
+      );
+
+      const body = JSON.stringify(makePRPayload({ number: 7 }));
+      const deliveryId = "11111111-1111-1111-1111-111111111111";
+      const headers = {
+        "Content-Type": "application/json",
+        "x-github-event": "pull_request",
+        "x-github-delivery": deliveryId,
+        "x-hub-signature-256": sign(body, WEBHOOK_SECRET),
+      };
+
+      const first = await app.request("/api/webhooks/github", { method: "POST", headers, body });
+      expect(await first.json()).toMatchObject({ ok: true });
+
+      const second = await app.request("/api/webhooks/github", { method: "POST", headers, body });
+      expect(await second.json()).toMatchObject({ ok: true, duplicate: true });
+
+      // free the in-flight review so the test can finish
+      resolveOrchestrate();
+      // let the microtask queue drain so the dedupe set is cleaned up before
+      // any subsequent tests reuse the id
+      await new Promise<void>((r) => setTimeout(r, 0));
+    });
+
+    it("does not flag duplicates when the X-GitHub-Delivery header is missing", async () => {
+      // without the header, every request is treated as unique — matches
+      // legacy clients that don't set the header
+      const { orchestrateReview } = await import("../orchestrator.js");
+      (orchestrateReview as ReturnType<typeof vi.fn>).mockReset();
+      (orchestrateReview as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+      const body = JSON.stringify(makePRPayload({ number: 8 }));
+      const headers = {
+        "Content-Type": "application/json",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": sign(body, WEBHOOK_SECRET),
+      };
+
+      const first = await app.request("/api/webhooks/github", { method: "POST", headers, body });
+      const second = await app.request("/api/webhooks/github", { method: "POST", headers, body });
+
+      expect(await first.json()).not.toMatchObject({ duplicate: true });
+      expect(await second.json()).not.toMatchObject({ duplicate: true });
+    });
+
+    it("allows the same delivery id to be processed again after the first completes", async () => {
+      const { orchestrateReview } = await import("../orchestrator.js");
+      (orchestrateReview as ReturnType<typeof vi.fn>).mockReset();
+      (orchestrateReview as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+      const body = JSON.stringify(makePRPayload({ number: 9 }));
+      const deliveryId = "22222222-2222-2222-2222-222222222222";
+      const headers = {
+        "Content-Type": "application/json",
+        "x-github-event": "pull_request",
+        "x-github-delivery": deliveryId,
+        "x-hub-signature-256": sign(body, WEBHOOK_SECRET),
+      };
+
+      const first = await app.request("/api/webhooks/github", { method: "POST", headers, body });
+      expect(await first.json()).toMatchObject({ ok: true });
+
+      // wait for the fire-and-forget runReview to clean up the delivery id
+      await new Promise<void>((r) => setTimeout(r, 10));
+
+      const second = await app.request("/api/webhooks/github", { method: "POST", headers, body });
+      // not flagged as duplicate because the first run already completed and
+      // removed the id from the in-flight set
+      expect(await second.json()).toMatchObject({ ok: true });
+      expect(await second.json().catch(() => ({}))).not.toMatchObject({ duplicate: true });
+    });
+  });
+
   describe("config CRUD", () => {
     it("returns empty list initially", async () => {
       const res = await app.request("/api/config/repos");

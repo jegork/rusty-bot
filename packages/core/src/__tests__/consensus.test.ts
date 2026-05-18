@@ -499,6 +499,117 @@ describe("runConsensusReview failure tolerance", () => {
   });
 });
 
+describe("runConsensusReview ticket compliance pass-0-only invariant", () => {
+  const ticketContext = [
+    {
+      id: "AUTH-42",
+      title: "JWT auth",
+      description: "Login with JWT",
+      labels: [] as string[],
+      source: "jira",
+    },
+  ];
+
+  beforeEach(() => {
+    callCount = 0;
+    mockBehavior = "default";
+    delete process.env.RUSTY_REVIEW_MODELS;
+    delete process.env.RUSTY_REVIEW_TEMPERATURES;
+    process.env.RUSTY_REVIEW_ADAPTIVE_PASSES = "false";
+    vi.clearAllMocks();
+  });
+
+  it("returns pass 0's ticketCompliance verbatim when pass 0 succeeds", async () => {
+    const { runReview } = await import("../agent/review.js");
+    const pass0Compliance = [
+      {
+        ticketId: "AUTH-42",
+        requirement: "Login endpoint returns JWT",
+        status: "addressed" as const,
+        evidence: "src/auth.ts:42 — returns JWT",
+      },
+    ];
+    (runReview as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(makeResult({ ticketCompliance: pass0Compliance }))
+      .mockResolvedValueOnce(makeResult({ ticketCompliance: [] }))
+      .mockResolvedValueOnce(makeResult({ ticketCompliance: [] }));
+
+    const consensusConfig = { ...config, consensusPasses: 3 };
+    const result = await runConsensusReview(
+      [],
+      consensusConfig,
+      prMetadata,
+      "diff content",
+      ticketContext,
+    );
+
+    expect(result.ticketCompliance).toEqual(pass0Compliance);
+  });
+
+  it("returns EMPTY ticketCompliance (not pass 1's) when pass 0 fails — pass 1 never saw the tickets so its empty array is meaningless", async () => {
+    const { runReview } = await import("../agent/review.js");
+    const pass1Compliance = [
+      {
+        ticketId: "AUTH-42",
+        requirement: "should never appear in output",
+        status: "addressed" as const,
+        evidence: "this came from a pass that never saw the ticket",
+      },
+    ];
+    (runReview as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error("pass 0 transient failure"))
+      .mockResolvedValueOnce(makeResult({ ticketCompliance: pass1Compliance }))
+      .mockResolvedValueOnce(makeResult({ ticketCompliance: [] }));
+
+    const consensusConfig = { ...config, consensusPasses: 3 };
+    const result = await runConsensusReview(
+      [],
+      consensusConfig,
+      prMetadata,
+      "diff content",
+      ticketContext,
+    );
+
+    expect(result.ticketCompliance).toEqual([]);
+  });
+
+  it("emits a warn log when pass 0 fails and ticketContext was supplied", async () => {
+    const { runReview } = await import("../agent/review.js");
+    const { logger } = await import("../logger.js");
+    const warnSpy = vi.spyOn(logger, "warn");
+    (runReview as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error("pass 0 fail"))
+      .mockResolvedValueOnce(makeResult())
+      .mockResolvedValueOnce(makeResult());
+
+    const consensusConfig = { ...config, consensusPasses: 3 };
+    await runConsensusReview([], consensusConfig, prMetadata, "diff content", ticketContext);
+
+    const ticketWarn = warnSpy.mock.calls.find(
+      (call) => typeof call[1] === "string" && call[1].includes("ticket compliance unavailable"),
+    );
+    expect(ticketWarn).toBeDefined();
+  });
+
+  it("does NOT emit the ticket-compliance warn when pass 0 fails but no tickets were linked (no compliance was expected anyway)", async () => {
+    const { runReview } = await import("../agent/review.js");
+    const { logger } = await import("../logger.js");
+    const warnSpy = vi.spyOn(logger, "warn");
+    (runReview as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error("pass 0 fail"))
+      .mockResolvedValueOnce(makeResult())
+      .mockResolvedValueOnce(makeResult());
+
+    const consensusConfig = { ...config, consensusPasses: 3 };
+    await runConsensusReview([], consensusConfig, prMetadata, "diff content"); // no ticketContext
+
+    const ticketWarn = warnSpy.mock.calls.find(
+      (call) => typeof call[1] === "string" && call[1].includes("ticket compliance unavailable"),
+    );
+    expect(ticketWarn).toBeUndefined();
+  });
+});
+
 describe("RUSTY_LOG_RAW_FINDINGS", () => {
   beforeEach(() => {
     callCount = 0;

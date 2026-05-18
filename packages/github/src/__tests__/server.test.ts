@@ -26,6 +26,10 @@ vi.mock("../storage.js", async () => {
       const sorted = [...reviews].reverse();
       return sorted.slice(offset, offset + limit);
     }),
+    listReviewsPage: vi.fn(async (limit = 50, offset = 0) => {
+      const sorted = [...reviews].reverse();
+      return { items: sorted.slice(offset, offset + limit), total: reviews.length };
+    }),
     getReview: vi.fn(async (id: string) => reviews.find((r) => r.id === id) ?? null),
     saveReview: vi.fn(async (review: Record<string, unknown>) => {
       reviews.push(review);

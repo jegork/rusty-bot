@@ -168,6 +168,17 @@ export function mergeResults(results: ReviewResult[], modelUsed: string): Review
     return true;
   });
 
+  // observations cross-chunk-dedup mirrors findings — when chunks overlap or
+  // observe the same unchanged code, we'd otherwise emit the same observation
+  // multiple times in the merged result
+  const seenObs = new Set<string>();
+  const dedupedObservations = allObservations.filter((o) => {
+    const key = `${o.file}:${o.line}:${o.message}`;
+    if (seenObs.has(key)) return false;
+    seenObs.add(key);
+    return true;
+  });
+
   const droppedSeen = new Set<string>();
   const dedupedDropped: DroppedFinding[] = [];
   for (const r of results) {
@@ -207,7 +218,7 @@ export function mergeResults(results: ReviewResult[], modelUsed: string): Review
     summary,
     recommendation,
     findings: dedupedFindings,
-    observations: allObservations,
+    observations: dedupedObservations,
     ticketCompliance: mergeTicketCompliance(results),
     missingTests: mergeMissingTests(results),
     filesReviewed: [...allFiles],

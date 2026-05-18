@@ -41,7 +41,7 @@ Do not report:
 
 - Do not speculate about broken imports or unused exports without using searchCode to verify.
 - Do not comment on formatting or trivial style issues unless specifically asked to review code style.
-- For ticket compliance, use "not_addressed" only when the visible changes clearly fail to satisfy a requirement; use "unclear" when the diff does not contain enough evidence to decide.
+- Linked tickets are CONTEXT, not a per-PR checklist. PRs commonly implement one slice of a larger ticket; do not flag missing scope as a problem just because it isn't visible in this diff. Reserve `not_addressed` for cases where the diff actively contradicts or breaks a requirement; use `unclear` when the diff is silent (no positive or negative evidence) — never write a summary saying the PR "fails to include" work the ticket describes but this diff doesn't show.
 - When an "Other Files Changed in This PR" section is present, those files are being modified in this PR and reviewed separately. Do not flag them as issues in unchanged code. Note that searchCode results for those files may reflect pre-merge content.
 
 Summary writing rules:

@@ -150,13 +150,40 @@ export function buildUserMessage(
       }
     }
     parts.push(
-      "\nPlease extract the concrete requirements or acceptance criteria from each linked ticket " +
-        "into the structured ticketCompliance output. Evaluate each requirement individually, " +
-        "keep requirement wording stable across equivalent checks so later passes can merge into the same checklist, " +
-        "and prefer adding evidence to an existing requirement rather than restating it with different phrasing. " +
-        "set ticketId when you can, cite diff evidence when available, use `not_addressed` " +
-        "only when the visible changes clearly do not satisfy the requirement, and use `unclear` " +
-        "when the visible changes are insufficient to decide.",
+      "\nThe linked tickets above are CONTEXT for this PR — they describe the work the change " +
+        "fits into, NOT a checklist that must be fully delivered by this PR. PRs commonly implement " +
+        "one slice of a larger ticket; earlier commits on this branch, sibling PRs, or later work may " +
+        "handle the rest. Do NOT flag missing scope as a problem just because it isn't visible in this diff, " +
+        "and do NOT write summary prose claiming the PR 'fails to include' work that the ticket describes " +
+        "but this diff doesn't show.",
+    );
+    parts.push(
+      "\nExtract each concrete requirement into the structured `ticketCompliance` output and grade it:",
+    );
+    parts.push(
+      "- `addressed` — this PR's diff contains positive evidence the requirement is now met.",
+    );
+    parts.push(
+      "- `partially_addressed` — this PR clearly advances the requirement but doesn't fully close it.",
+    );
+    parts.push(
+      "- `not_addressed` — reserved for cases where this PR actively CONTRADICTS or BREAKS the " +
+        "requirement (e.g. the diff removes a check the ticket asked for, or implements the opposite " +
+        "of the requested behavior). Do NOT use this just because the diff is silent — use `unclear` instead.",
+    );
+    parts.push(
+      "- `unclear` — the default when this PR's diff is silent on the requirement (no positive or " +
+        "negative evidence). Use this freely; it carries no negative judgment.",
+    );
+    parts.push(
+      "\nIf a 'Files already covered by the prior review' section is present, assume requirements that " +
+        "map to those files were already evaluated in the prior pass and do NOT re-grade them as " +
+        "`not_addressed` from this incremental diff alone.",
+    );
+    parts.push(
+      "\nKeep requirement wording stable across equivalent checks so later passes can merge into the " +
+        "same checklist. Prefer adding evidence to an existing requirement over restating it with " +
+        "different phrasing. Set `ticketId` when you can, and cite diff evidence when available.",
     );
   }
 

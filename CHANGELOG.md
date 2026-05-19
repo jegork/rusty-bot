@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.15.0](https://github.com/jegork/rusty-bot/compare/v1.14.3...v1.15.0) (2026-05-19)
+
+
+### Features
+
+* **github-server:** webhook delivery dedupe + concurrency semaphore ([#197](https://github.com/jegork/rusty-bot/issues/197)) ([606478e](https://github.com/jegork/rusty-bot/commit/606478e98493d349df28dc0056446b9be102de94))
+
+
+### Bug Fixes
+
+* bug fixes and API improvements (clean subset) ([#193](https://github.com/jegork/rusty-bot/issues/193)) ([9ca798b](https://github.com/jegork/rusty-bot/commit/9ca798b4c54937453ab0e23ce874dc48d5e903c1))
+* **consensus:** honest ticket-compliance fallback when pass 0 fails ([#194](https://github.com/jegork/rusty-bot/issues/194)) ([9d3d4b6](https://github.com/jegork/rusty-bot/commit/9d3d4b61ef72bfd5f881755420fb6a6d03f00964))
+* **description:** augment existing description in-place on incremental re-reviews ([#190](https://github.com/jegork/rusty-bot/issues/190)) ([0d7746c](https://github.com/jegork/rusty-bot/commit/0d7746cbbdeac665284e5090023d7728136aeed2))
+* **github-storage:** serialize concurrent writes through a promise-chain mutex ([#196](https://github.com/jegork/rusty-bot/issues/196)) ([fdc81a3](https://github.com/jegork/rusty-bot/commit/fdc81a317877405ecd8f16715bd8a4750a94df6c))
+* **prompt:** treat linked tickets as context, not a per-PR checklist ([#192](https://github.com/jegork/rusty-bot/issues/192)) ([8100d7e](https://github.com/jegork/rusty-bot/commit/8100d7e415a960689a039453a5683940556678e8))
+* **review:** move anti-meta-narrative rules into the base system prompt ([#189](https://github.com/jegork/rusty-bot/issues/189)) ([b64e388](https://github.com/jegork/rusty-bot/commit/b64e38811b72e423ac83751f4af9ed93e6f838de))
+
 ## [1.14.3](https://github.com/jegork/rusty-bot/compare/v1.14.2...v1.14.3) (2026-05-14)
 
 

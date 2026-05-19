@@ -167,7 +167,9 @@ function parseDiff(rawDiff: string): FilePatch[] {
 
 /** subset of github's IssueComment shape we actually read — we only care about
  * the body text, which carries the hidden bot markers. */
-interface CachedPRComment { body?: string | null }
+interface CachedPRComment {
+  body?: string | null;
+}
 
 export class GitHubProvider implements GitProvider {
   private readonly octokit: Octokit;

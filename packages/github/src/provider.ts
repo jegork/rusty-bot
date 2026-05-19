@@ -165,17 +165,45 @@ function parseDiff(rawDiff: string): FilePatch[] {
   return patches;
 }
 
+/** subset of github's IssueComment shape we actually read — we only care about
+ * the body text, which carries the hidden bot markers. */
+interface CachedPRComment {
+  body?: string | null;
+}
+
 export class GitHubProvider implements GitProvider {
   private readonly octokit: Octokit;
   private readonly owner: string;
   private readonly repo: string;
   private readonly pullNumber: number;
+  /** in-flight (or resolved) promise for the PR comments fetch, scoped to the
+   * lifetime of this provider instance. `getLastReviewedSha` and
+   * `getPriorReviewContext` both walk the same comment list — without this
+   * cache, an incremental re-review fires two identical API calls for the
+   * same data. provider instances are constructed per-review (see cli.ts and
+   * orchestrator.ts) so the cache lifetime matches what we want: one fetch
+   * per review, never stale across reviews. */
+  private commentsPromise: Promise<CachedPRComment[]> | null = null;
 
   constructor(config: GitHubProviderConfig) {
     this.octokit = config.octokit;
     this.owner = config.owner;
     this.repo = config.repo;
     this.pullNumber = config.pullNumber;
+  }
+
+  /** fetch the issue comments list once per provider instance. concurrent
+   * callers that hit this before the fetch resolves all await the same
+   * in-flight promise. */
+  private async fetchPRCommentsCached(): Promise<CachedPRComment[]> {
+    this.commentsPromise ??= this.octokit
+      .request("GET /repos/{owner}/{repo}/issues/{issue_number}/comments", {
+        owner: this.owner,
+        repo: this.repo,
+        issue_number: this.pullNumber,
+      })
+      .then((response) => response.data as CachedPRComment[]);
+    return this.commentsPromise;
   }
 
   async getRawDiff(): Promise<string> {
@@ -218,14 +246,7 @@ export class GitHubProvider implements GitProvider {
   }
 
   async getLastReviewedSha(): Promise<string | null> {
-    const { data: comments } = await this.octokit.request(
-      "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
-      {
-        owner: this.owner,
-        repo: this.repo,
-        issue_number: this.pullNumber,
-      },
-    );
+    const comments = await this.fetchPRCommentsCached();
 
     // walk newest-first so a fresher marker wins if multiple bot comments survive
     for (let i = comments.length - 1; i >= 0; i--) {
@@ -238,14 +259,7 @@ export class GitHubProvider implements GitProvider {
   }
 
   async getPriorReviewContext(): Promise<PriorReviewContext | null> {
-    const { data: comments } = await this.octokit.request(
-      "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
-      {
-        owner: this.owner,
-        repo: this.repo,
-        issue_number: this.pullNumber,
-      },
-    );
+    const comments = await this.fetchPRCommentsCached();
 
     // walk newest-first; only return the most recent prior context
     for (let i = comments.length - 1; i >= 0; i--) {

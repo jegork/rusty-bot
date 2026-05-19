@@ -168,6 +168,22 @@ export async function runConsensusReview(
     }
   }
 
+  // ticket compliance comes from pass 0 only — pass 0 is the single pass that
+  // received `ticketContext` (line 140 above; this is a deliberate token-cost
+  // optimization since linked tickets can be 5-10k tokens). settled[0] is
+  // always pass 0 because Promise.allSettled preserves input order. when pass
+  // 0 failed we have NO compliance data — returning a later pass's empty
+  // compliance array would silently read as "no requirements outstanding,"
+  // which is the opposite of the truth. emit an explicit warn and return empty.
+  const pass0Outcome = settled[0];
+  const pass0Result = pass0Outcome.status === "fulfilled" ? pass0Outcome.value : undefined;
+  if (!pass0Result && ticketContext && ticketContext.length > 0) {
+    logger.warn(
+      { prId: prMetadata.id, passes, failedPasses: failures.length },
+      "pass 0 failed; ticket compliance unavailable for this review (no fallback pass receives ticketContext)",
+    );
+  }
+
   if (results.length === 0) {
     throw new AggregateError(failures, `consensus review failed: 0/${passes} passes succeeded`);
   }
@@ -306,7 +322,7 @@ export async function runConsensusReview(
     recommendation,
     findings: survivingFindings,
     observations: survivingObservations,
-    ticketCompliance: results[0]?.ticketCompliance ?? [],
+    ticketCompliance: pass0Result?.ticketCompliance ?? [],
     missingTests: mergeMissingTests(results),
     filesReviewed: [...allFiles],
     modelUsed: results[0]?.modelUsed ?? "unknown",

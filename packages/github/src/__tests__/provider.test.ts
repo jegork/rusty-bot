@@ -283,6 +283,82 @@ describe("GitHubProvider", () => {
     });
   });
 
+  describe("comment-fetch memoization", () => {
+    const ctx: PriorReviewContext = {
+      summary: "earlier review",
+      recommendation: "looks_good",
+      findings: [],
+    };
+
+    it("calls the comments API once even when both getLastReviewedSha and getPriorReviewContext are invoked", async () => {
+      // single mock response — if the second method were uncached it would
+      // hit a fresh `request` slot and get `undefined`, breaking the test
+      octokit.request.mockResolvedValueOnce({
+        data: [
+          {
+            id: 1,
+            body:
+              "<!-- rusty-bot-review -->\n" +
+              "<!-- rusty-bot:last-sha:abc123def4560000000000000000000000000000 -->\n" +
+              encodePriorReviewContext(ctx),
+          },
+        ],
+      });
+
+      const sha = await provider.getLastReviewedSha();
+      const decoded = await provider.getPriorReviewContext();
+
+      expect(sha).toBe("abc123def4560000000000000000000000000000");
+      expect(decoded).toEqual(ctx);
+
+      const commentFetchCalls = octokit.request.mock.calls.filter(
+        (call) => call[0] === "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
+      );
+      expect(commentFetchCalls).toHaveLength(1);
+    });
+
+    it("dedupes concurrent in-flight fetches into one API call", async () => {
+      // both calls fire before the request resolves; both must await the same
+      // in-flight promise so we still hit the API only once
+      let resolveFetch!: (value: { data: unknown[] }) => void;
+      octokit.request.mockReturnValueOnce(
+        new Promise((r) => {
+          resolveFetch = r;
+        }),
+      );
+
+      const shaPromise = provider.getLastReviewedSha();
+      const ctxPromise = provider.getPriorReviewContext();
+
+      resolveFetch({ data: [] });
+
+      await Promise.all([shaPromise, ctxPromise]);
+
+      const commentFetchCalls = octokit.request.mock.calls.filter(
+        (call) => call[0] === "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
+      );
+      expect(commentFetchCalls).toHaveLength(1);
+    });
+
+    it("re-fetches when a fresh provider instance is constructed (cache is per-instance)", async () => {
+      octokit.request.mockResolvedValueOnce({ data: [] }).mockResolvedValueOnce({ data: [] });
+
+      await provider.getLastReviewedSha();
+      const provider2 = new GitHubProvider({
+        octokit,
+        owner: OWNER,
+        repo: REPO,
+        pullNumber: PULL_NUMBER,
+      });
+      await provider2.getLastReviewedSha();
+
+      const commentFetchCalls = octokit.request.mock.calls.filter(
+        (call) => call[0] === "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
+      );
+      expect(commentFetchCalls).toHaveLength(2);
+    });
+  });
+
   describe("getDiffSinceSha", () => {
     const HEAD_SHA = "feedface0000000000000000000000000000face";
     const SINCE_SHA = "deadbeef0000000000000000000000000000beef";

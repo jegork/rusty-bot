@@ -17,19 +17,35 @@ export type ModelConfig =
 export function resolveModelConfig(): ModelConfig {
   const model = process.env.RUSTY_LLM_MODEL ?? "anthropic/claude-sonnet-4-20250514";
 
-  // azure-openai/deployment-name with API key
-  // accepts both AZURE_API_KEY (mastra convention) and AZURE_OPENAI_API_KEY
+  // azure-openai/<deployment> — derive deployment from the model prefix so a
+  // single Azure resource can host multiple deployments (gpt-5.4-mini,
+  // gpt-5.3-codex, etc.) and consensus passes can mix them.
+  // accepts AZURE_API_KEY (mastra convention) or AZURE_OPENAI_API_KEY.
+  // when no API key is present but AZURE_OPENAI_RESOURCE_NAME is set, fall
+  // through to managed identity / Entra ID auth — DefaultAzureCredential
+  // picks up workload-identity / service-principal / managed-identity creds
+  // from the runtime environment.
   const azureApiKey = process.env.AZURE_API_KEY ?? process.env.AZURE_OPENAI_API_KEY;
-  if (model.startsWith("azure-openai/") && azureApiKey && process.env.AZURE_OPENAI_RESOURCE_NAME) {
+  if (model.startsWith("azure-openai/") && process.env.AZURE_OPENAI_RESOURCE_NAME) {
+    if (azureApiKey) {
+      return {
+        type: "azure-api-key",
+        resourceName: process.env.AZURE_OPENAI_RESOURCE_NAME,
+        deploymentName: model.replace("azure-openai/", ""),
+        apiKey: azureApiKey,
+      };
+    }
     return {
-      type: "azure-api-key",
+      type: "azure-managed-identity",
       resourceName: process.env.AZURE_OPENAI_RESOURCE_NAME,
       deploymentName: model.replace("azure-openai/", ""),
-      apiKey: azureApiKey,
     };
   }
 
-  // azure with managed identity (no API key)
+  // legacy single-deployment override: when RUSTY_AZURE_RESOURCE_NAME +
+  // RUSTY_AZURE_DEPLOYMENT are both set, use them regardless of the model
+  // prefix. predates the prefix-based managed-identity branch above; kept for
+  // backward compat with setups that pin a single Azure deployment.
   if (process.env.RUSTY_AZURE_RESOURCE_NAME && process.env.RUSTY_AZURE_DEPLOYMENT) {
     return {
       type: "azure-managed-identity",
@@ -38,18 +54,28 @@ export function resolveModelConfig(): ModelConfig {
     };
   }
 
-  // non-OpenAI models on Azure AI Foundry (Kimi, Llama, Mistral, etc.) — they
-  // share the AOAI endpoint shape but only support /chat/completions, not the
-  // newer /responses API that azure(deployment) defaults to.
-  if (model.startsWith("azure-foundry/") && azureApiKey && process.env.AZURE_OPENAI_RESOURCE_NAME) {
+  // non-OpenAI models on Azure AI Foundry (Kimi, Llama, Mistral, DeepSeek,
+  // etc.) — they share the AOAI endpoint shape but only support
+  // /chat/completions, not the newer /responses API that azure(deployment)
+  // defaults to. same prefix-driven api-key-or-entra dispatch as azure-openai
+  // above; falls through to managed identity when no api key is set.
+  if (model.startsWith("azure-foundry/") && process.env.AZURE_OPENAI_RESOURCE_NAME) {
+    if (azureApiKey) {
+      return {
+        type: "azure-foundry-api-key",
+        resourceName: process.env.AZURE_OPENAI_RESOURCE_NAME,
+        deploymentName: model.replace("azure-foundry/", ""),
+        apiKey: azureApiKey,
+      };
+    }
     return {
-      type: "azure-foundry-api-key",
+      type: "azure-foundry-managed-identity",
       resourceName: process.env.AZURE_OPENAI_RESOURCE_NAME,
       deploymentName: model.replace("azure-foundry/", ""),
-      apiKey: azureApiKey,
     };
   }
 
+  // legacy single-deployment override for foundry (same rationale as above)
   if (process.env.RUSTY_AZURE_FOUNDRY_RESOURCE_NAME && process.env.RUSTY_AZURE_FOUNDRY_DEPLOYMENT) {
     return {
       type: "azure-foundry-managed-identity",
@@ -58,21 +84,31 @@ export function resolveModelConfig(): ModelConfig {
     };
   }
 
-  // anthropic on azure ai foundry (api key mode)
-  // accepts both AZURE_ANTHROPIC_API_KEY and RUSTY_AZURE_ANTHROPIC_API_KEY
+  // anthropic on azure ai foundry. accepts AZURE_ANTHROPIC_API_KEY or
+  // RUSTY_AZURE_ANTHROPIC_API_KEY for api-key mode; falls through to
+  // managed identity / Entra ID when no key is set (DefaultAzureCredential
+  // resolves the runtime creds, scope cognitiveservices.azure.com/.default).
   const azureAnthropicBaseUrl = process.env.RUSTY_AZURE_ANTHROPIC_BASE_URL;
   const azureAnthropicApiKey =
     process.env.RUSTY_AZURE_ANTHROPIC_API_KEY ?? process.env.AZURE_ANTHROPIC_API_KEY;
-  if (model.startsWith("azure-anthropic/") && azureAnthropicBaseUrl && azureAnthropicApiKey) {
+  if (model.startsWith("azure-anthropic/") && azureAnthropicBaseUrl) {
+    if (azureAnthropicApiKey) {
+      return {
+        type: "azure-anthropic-api-key",
+        baseUrl: azureAnthropicBaseUrl,
+        deploymentName: model.replace("azure-anthropic/", ""),
+        apiKey: azureAnthropicApiKey,
+      };
+    }
     return {
-      type: "azure-anthropic-api-key",
+      type: "azure-anthropic-managed-identity",
       baseUrl: azureAnthropicBaseUrl,
       deploymentName: model.replace("azure-anthropic/", ""),
-      apiKey: azureAnthropicApiKey,
     };
   }
 
-  // anthropic on azure ai foundry (managed identity / entra id mode)
+  // legacy single-deployment override for anthropic (same rationale as the
+  // openai/foundry overrides above)
   if (azureAnthropicBaseUrl && process.env.RUSTY_AZURE_ANTHROPIC_DEPLOYMENT) {
     return {
       type: "azure-anthropic-managed-identity",

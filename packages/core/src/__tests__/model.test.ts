@@ -223,6 +223,116 @@ describe("resolveModelConfig", () => {
     }
   });
 
+  // Entra-ID-by-absence-of-key paths — these let a single Azure resource
+  // host multiple deployments and use the bot's per-slot model strings
+  // without needing one RUSTY_AZURE_*_DEPLOYMENT env var per deployment.
+
+  it("falls through to azure-managed-identity when azure-openai prefix + resource name are set but no API key", () => {
+    process.env.RUSTY_LLM_MODEL = "azure-openai/gpt-5.4-mini";
+    process.env.AZURE_OPENAI_RESOURCE_NAME = "ai-code-review-foundry";
+    // no AZURE_API_KEY / AZURE_OPENAI_API_KEY
+
+    const config = resolveModelConfig();
+    expect(config).toEqual({
+      type: "azure-managed-identity",
+      resourceName: "ai-code-review-foundry",
+      deploymentName: "gpt-5.4-mini",
+    });
+  });
+
+  it("derives the azure-openai managed-identity deployment from the model prefix per call (multi-deployment Entra)", () => {
+    // critical for consensus: each pass calls resolveModelConfigWithOverride
+    // with its own model string; under Entra ID, each must resolve to its own
+    // deployment, not a single RUSTY_AZURE_DEPLOYMENT
+    process.env.AZURE_OPENAI_RESOURCE_NAME = "ai-code-review-foundry";
+
+    const a = resolveModelConfigWithOverride("azure-openai/gpt-5.4-mini");
+    const b = resolveModelConfigWithOverride("azure-openai/gpt-5.3-codex");
+
+    expect(a).toEqual({
+      type: "azure-managed-identity",
+      resourceName: "ai-code-review-foundry",
+      deploymentName: "gpt-5.4-mini",
+    });
+    expect(b).toEqual({
+      type: "azure-managed-identity",
+      resourceName: "ai-code-review-foundry",
+      deploymentName: "gpt-5.3-codex",
+    });
+  });
+
+  it("falls through to azure-foundry-managed-identity when azure-foundry prefix + resource name are set but no API key", () => {
+    process.env.RUSTY_LLM_MODEL = "azure-foundry/DeepSeek-V4-Flash";
+    process.env.AZURE_OPENAI_RESOURCE_NAME = "ai-code-review-foundry";
+    // no AZURE_API_KEY
+
+    const config = resolveModelConfig();
+    expect(config).toEqual({
+      type: "azure-foundry-managed-identity",
+      resourceName: "ai-code-review-foundry",
+      deploymentName: "DeepSeek-V4-Flash",
+    });
+  });
+
+  it("falls through to azure-anthropic-managed-identity when azure-anthropic prefix + base URL are set but no API key", () => {
+    process.env.RUSTY_LLM_MODEL = "azure-anthropic/claude-sonnet-4-6";
+    process.env.RUSTY_AZURE_ANTHROPIC_BASE_URL =
+      "https://ai-code-review-foundry.services.ai.azure.com/anthropic/v1";
+    // no RUSTY_AZURE_ANTHROPIC_API_KEY / AZURE_ANTHROPIC_API_KEY
+
+    const config = resolveModelConfig();
+    expect(config).toEqual({
+      type: "azure-anthropic-managed-identity",
+      baseUrl: "https://ai-code-review-foundry.services.ai.azure.com/anthropic/v1",
+      deploymentName: "claude-sonnet-4-6",
+    });
+  });
+
+  it("prefers azure-api-key over managed-identity when an API key is set (api-key wins by default)", () => {
+    process.env.RUSTY_LLM_MODEL = "azure-openai/gpt-5.4-mini";
+    process.env.AZURE_OPENAI_RESOURCE_NAME = "ai-code-review-foundry";
+    process.env.AZURE_OPENAI_API_KEY = "secret";
+
+    const config = resolveModelConfig();
+    expect(config.type).toBe("azure-api-key");
+  });
+
+  it("legacy RUSTY_AZURE_RESOURCE_NAME + RUSTY_AZURE_DEPLOYMENT still wins when no prefix match (backward compat)", () => {
+    // a setup that predates per-prefix Entra and never set the azure-openai/ prefix
+    // continues to resolve as before
+    process.env.RUSTY_LLM_MODEL = "anthropic/some-model";
+    process.env.RUSTY_AZURE_RESOURCE_NAME = "legacy-resource";
+    process.env.RUSTY_AZURE_DEPLOYMENT = "legacy-deployment";
+
+    const config = resolveModelConfig();
+    expect(config).toEqual({
+      type: "azure-managed-identity",
+      resourceName: "legacy-resource",
+      deploymentName: "legacy-deployment",
+    });
+  });
+
+  it("user's actual config: 4 azure-* models all resolve to managed-identity from one resource name", () => {
+    // mirrors the production ADO pipeline config: one resource, multiple
+    // deployments across openai/foundry/anthropic, all secret-less
+    process.env.AZURE_OPENAI_RESOURCE_NAME = "ai-code-review-foundry";
+    process.env.RUSTY_AZURE_ANTHROPIC_BASE_URL =
+      "https://ai-code-review-foundry.services.ai.azure.com/anthropic/v1";
+
+    expect(resolveModelConfigWithOverride("azure-openai/gpt-5.4-mini").type).toBe(
+      "azure-managed-identity",
+    );
+    expect(resolveModelConfigWithOverride("azure-openai/gpt-5.3-codex").type).toBe(
+      "azure-managed-identity",
+    );
+    expect(resolveModelConfigWithOverride("azure-foundry/DeepSeek-V4-Flash").type).toBe(
+      "azure-foundry-managed-identity",
+    );
+    expect(resolveModelConfigWithOverride("azure-anthropic/claude-sonnet-4-6").type).toBe(
+      "azure-anthropic-managed-identity",
+    );
+  });
+
   it("builds ollama config from `ollama/` prefix with no env vars (local default)", () => {
     process.env.RUSTY_LLM_MODEL = "ollama/llama3.2";
     const config = resolveModelConfig();

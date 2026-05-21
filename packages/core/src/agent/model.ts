@@ -229,12 +229,22 @@ export function resolveModel(
       const azureFetch = (async (input: unknown, init?: Record<string, unknown>) => {
         const token = await credential.getToken(scope);
         const headers = new Headers(init?.headers as ConstructorParameters<typeof Headers>[0]);
+        // strip the placeholder api-key header set by @ai-sdk/azure's
+        // getHeaders before swapping in the Entra bearer token. azure
+        // accepts EITHER `api-key` OR `Authorization: Bearer ...` but the
+        // bearer form requires the api-key header NOT be present.
+        headers.delete("api-key");
         headers.set("Authorization", `Bearer ${token.token}`);
         return globalThis.fetch(input as Parameters<typeof fetch>[0], { ...init, headers });
       }) as typeof globalThis.fetch;
 
       const azure = createAzure({
         resourceName: config.resourceName,
+        // createAzure's `loadApiKey` fires in getHeaders BEFORE the fetch
+        // override runs — without a non-empty apiKey here, the SDK throws
+        // AI_LoadAPIKeyError pre-flight. the placeholder value is overwritten
+        // by the fetch wrapper above; it never reaches the wire.
+        apiKey: "managed-identity",
         fetch: azureFetch,
       });
       return azure(config.deploymentName);
@@ -260,6 +270,8 @@ export function resolveModel(
       const azureFetch = (async (input: unknown, init?: Record<string, unknown>) => {
         const token = await credential.getToken(scope);
         const headers = new Headers(init?.headers as ConstructorParameters<typeof Headers>[0]);
+        // same api-key strip + Bearer swap as azure-managed-identity above
+        headers.delete("api-key");
         headers.set("Authorization", `Bearer ${token.token}`);
         const next = { ...init, headers };
         if (disableThinking) mutateBodyForFoundry(next, { disableThinking: true });
@@ -268,6 +280,9 @@ export function resolveModel(
 
       const azure = createAzure({
         resourceName: config.resourceName,
+        // same placeholder rationale as azure-managed-identity — overwritten
+        // by the fetch wrapper before any request is sent.
+        apiKey: "managed-identity",
         fetch: azureFetch,
       });
       return azure.chat(config.deploymentName);

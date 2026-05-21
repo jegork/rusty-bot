@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.0](https://github.com/jegork/rusty-bot/compare/v1.15.0...v1.16.0) (2026-05-21)
+
+
+### Features
+
+* **model:** Entra ID auth for multi-deployment azure-openai/azure-foundry/azure-anthropic setups ([#198](https://github.com/jegork/rusty-bot/issues/198)) ([7a3e1c5](https://github.com/jegork/rusty-bot/commit/7a3e1c5acf92600e694412bf91dd992f3d927b63))
+
 ## [1.15.0](https://github.com/jegork/rusty-bot/compare/v1.14.3...v1.15.0) (2026-05-20)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.1](https://github.com/jegork/rusty-bot/compare/v1.16.0...v1.16.1) (2026-05-21)
+
+
+### Bug Fixes
+
+* **model:** supply placeholder apiKey to createAzure for Entra ID paths so @ai-sdk/azure's pre-flight loadApiKey doesn't throw ([#200](https://github.com/jegork/rusty-bot/issues/200)) ([6853c7f](https://github.com/jegork/rusty-bot/commit/6853c7f640b7674f996b8a2b4273dc6fcb8fa39f))
+
 ## [1.16.0](https://github.com/jegork/rusty-bot/compare/v1.15.0...v1.16.0) (2026-05-21)
 
 

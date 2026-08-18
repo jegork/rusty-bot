@@ -446,7 +446,7 @@ export class GitHubProvider implements GitProvider {
     const botComments = comments.filter((c: { body?: string }) => c.body?.includes(BOT_MARKER));
 
     await Promise.all(
-      botComments.map((c: { id: number }) =>
+      botComments.map((c) =>
         this.octokit.request("DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}", {
           owner: this.owner,
           repo: this.repo,

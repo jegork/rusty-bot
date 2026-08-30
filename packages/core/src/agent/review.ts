@@ -397,7 +397,7 @@ export async function runReview(
   options?: RunReviewOptions,
 ): Promise<ReviewResult> {
   const tier = options?.tier ?? "deep-review";
-  const systemPrompt = buildSystemPrompt(config);
+  const systemPrompt = buildSystemPrompt(config, tier);
   const userMessage = buildUserMessage(
     diff,
     prMetadata,

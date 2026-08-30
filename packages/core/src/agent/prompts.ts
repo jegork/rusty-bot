@@ -10,6 +10,7 @@ import type {
   PriorReviewContext,
 } from "../types.js";
 import type { OpenGrepFinding } from "../opengrep/types.js";
+import type { ReviewTier } from "./review.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const promptsDir = resolve(__dirname, "../prompts");
@@ -29,15 +30,50 @@ function buildFocusInstructions(focusAreas: FocusArea[]): string {
   return areas.map((area) => loadTemplate(`focus/${area}.txt`)).join("\n\n");
 }
 
-export function buildSystemPrompt(config: ReviewConfig): string {
+// the skim tier hands the agent no tools (buildTools returns {} for it) and a
+// reduced schema with no ticketCompliance and no missingTests. advertising
+// either anyway is not a harmless overstatement: a model that believes it has
+// searchCode can spend its whole turn deciding to call it and return an empty
+// completion instead of a review.
+const TIER_PROMPT_SECTIONS = {
+  "deep-review": {
+    tool_instructions: `You have access to tools:
+- **searchCode**: search the codebase for references to a symbol, function, import, or string. Use this to verify claims before making them — for example, if code is removed or renamed, search for usages before reporting it as an issue. Do not guess whether something is used elsewhere; check first.
+- **getFileContext**: fetch the full content of a file when you need more context than the diff provides.`,
+    extended_output_requirements: `- When linked tickets are provided, a ticketCompliance checklist that evaluates each requirement with one of: "addressed", "partially_addressed", "not_addressed", or "unclear"
+- A missingTests list identifying concrete test cases that should exist for the changed code. Each entry should describe a specific, actionable scenario (e.g. "edge case: empty input array causes crash", "error path: database connection timeout is unhandled") rather than vague suggestions like "add more tests". Only include entries when test gaps are actually present — leave the array empty when coverage appears adequate.`,
+    unverified_reference_qualifier: " unless you verified the claim with searchCode.",
+    speculation_rule:
+      "- Do not speculate about broken imports or unused exports without using searchCode to verify.",
+    other_files_tool_note:
+      " Note that searchCode results for those files may reflect pre-merge content.",
+  },
+  skim: {
+    tool_instructions: `You have NO tools in this review. You cannot search the codebase or open files — the diff below is everything you get. Do not attempt a tool call, and do not write that you are going to look something up. Every claim must rest on what the diff itself shows.`,
+    extended_output_requirements: "",
+    unverified_reference_qualifier:
+      " — you cannot check usage beyond the diff, so leave them out entirely.",
+    speculation_rule:
+      "- Do not speculate about code outside this diff. You are reviewing it in isolation, with no view of the wider codebase.",
+    other_files_tool_note: "",
+  },
+} as const;
+
+export function buildSystemPrompt(config: ReviewConfig, tier: ReviewTier = "deep-review"): string {
   const base = loadTemplate("base.txt");
   const styleInstructions = buildStyleInstructions(config.style);
   const focusInstructions = buildFocusInstructions(config.focusAreas);
   const conventionInstructions = config.conventionFile
     ? `\n\nAdditional instructions from the repository maintainer:\n${config.conventionFile}`
     : "";
+  const tierSections = TIER_PROMPT_SECTIONS[tier];
 
   return base
+    .replace("{{tool_instructions}}", tierSections.tool_instructions)
+    .replace("{{extended_output_requirements}}", tierSections.extended_output_requirements)
+    .replace("{{unverified_reference_qualifier}}", tierSections.unverified_reference_qualifier)
+    .replace("{{speculation_rule}}", tierSections.speculation_rule)
+    .replace("{{other_files_tool_note}}", tierSections.other_files_tool_note)
     .replace("{{style_instructions}}", styleInstructions)
     .replace("{{focus_instructions}}", focusInstructions)
     .replace("{{convention_instructions}}", conventionInstructions);

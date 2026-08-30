@@ -719,7 +719,7 @@ By default every file gets the same deep review treatment. When cascading is ena
 | Tier | What happens |
 |------|-------------|
 | **skip** | File is excluded entirely (lock files, auto-generated code, vendored deps) |
-| **skim** | Lightweight single-pass review — diff-only context, no tools, simplified output schema (no `suggestedFix`, no ticket compliance) |
+| **skim** | Lightweight single-pass review — diff-only context, no tools, reduced output schema (no ticket compliance, no missing-tests list). The system prompt is tier-aware, so a skim pass is never told about tools it doesn't have or fields its schema can't hold. |
 | **deep-review** | Full review pipeline — tree-sitter context expansion, code search tools, consensus voting, ticket compliance |
 
 **Tier failures degrade instead of aborting.** A tier runs on a single model (skim always; deep when consensus is off), so a dead upstream there used to take the whole action down. Now:

@@ -652,3 +652,44 @@ describe("buildUserMessage with priorContext", () => {
     expect(msg).not.toContain("Files already covered by the prior review");
   });
 });
+
+describe("buildSystemPrompt tier awareness", () => {
+  it("does not advertise tools to the skim tier, which is given none", () => {
+    const prompt = buildSystemPrompt(baseConfig, "skim");
+
+    expect(prompt).not.toContain("You have access to tools");
+    expect(prompt).not.toContain("searchCode");
+    expect(prompt).not.toContain("getFileContext");
+    expect(prompt).toContain("You have NO tools in this review");
+  });
+
+  it("does not ask the skim tier for fields its schema has no room for", () => {
+    const prompt = buildSystemPrompt(baseConfig, "skim");
+
+    expect(prompt).not.toContain("ticketCompliance checklist");
+    expect(prompt).not.toContain("missingTests list");
+  });
+
+  it("keeps tools and the full output contract for the deep-review tier", () => {
+    const prompt = buildSystemPrompt(baseConfig, "deep-review");
+
+    expect(prompt).toContain("You have access to tools");
+    expect(prompt).toContain("searchCode");
+    expect(prompt).toContain("ticketCompliance checklist");
+    expect(prompt).toContain("missingTests list");
+  });
+
+  it("defaults to the deep-review tier when none is given", () => {
+    expect(buildSystemPrompt(baseConfig)).toBe(buildSystemPrompt(baseConfig, "deep-review"));
+  });
+
+  it("leaves no unsubstituted placeholders in either tier", () => {
+    for (const tier of ["skim", "deep-review"] as const) {
+      expect(buildSystemPrompt(baseConfig, tier)).not.toMatch(/\{\{[a-z_]+\}\}/);
+    }
+  });
+
+  it("still tells the skim tier to emit findings with suggestedFix, which its schema keeps", () => {
+    expect(buildSystemPrompt(baseConfig, "skim")).toContain("`suggestedFix`");
+  });
+});

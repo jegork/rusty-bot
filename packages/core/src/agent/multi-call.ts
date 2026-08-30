@@ -591,10 +591,26 @@ export async function runCascadeReview(
     const skimResults = await runTierTolerant(skimPatches, skimTickets, resolvedOptions, "skim");
     allResults.push(...skimResults);
 
+    // skim runs one pass on one model, so a dead model there leaves its files
+    // with no review at all. the deep tier is the more capable path and, with
+    // consensus on, tolerates a bad seat — so promote rather than give up. it
+    // costs more than the skim pass would have; reviewing the files beats
+    // reporting on files nobody looked at.
+    const skimFailed = tierFailures.some((f) => f.tier === "skim");
+    const effectiveDeepPatches = skimFailed ? [...deepPatches, ...skimPatches] : deepPatches;
+    if (skimFailed && skimPatches.length > 0) {
+      logger.warn(
+        { promotedFiles: skimPatches.length, prId: prMetadata.id },
+        "skim tier failed; promoting its files to the deep-review tier",
+      );
+    }
+
     // pass skim file paths to the deep tier so the LLM knows they exist
     // (particularly important for ticket compliance — e.g. test files triaged
-    // as skim should still count as evidence when evaluating "add tests" requirements)
-    const skimFilePaths = skimPatches.map((p) => p.path);
+    // as skim should still count as evidence when evaluating "add tests" requirements).
+    // promoted files are in the deep patch set itself, so listing them as
+    // context-only files too would tell the model they're out of scope.
+    const skimFilePaths = skimFailed ? [] : skimPatches.map((p) => p.path);
     const deepOptionsWithSkimContext: RunReviewOptions =
       skimFilePaths.length > 0
         ? {
@@ -603,8 +619,10 @@ export async function runCascadeReview(
           }
         : resolvedOptions;
 
+    // a promoted skim file's tickets ride along with the deep tier's, which is
+    // where its only remaining review attempt happens
     const deepResults = await runTierTolerant(
-      deepPatches,
+      effectiveDeepPatches,
       deepTickets,
       deepOptionsWithSkimContext,
       "deep-review",
@@ -639,13 +657,11 @@ export async function runCascadeReview(
     const merged = mergeResults(allResults, allResults[0]?.modelUsed ?? "unknown");
 
     // a surviving tier renders as an ordinary review, so without this the PR
-    // comment silently covers fewer files than it appears to. say which ones
-    // went unreviewed rather than letting absence read as approval.
-    if (tierFailures.length > 0) {
-      const unreviewed = tierFailures.map((f) => `${f.fileCount} ${f.tier} file(s)`).join(" and ");
-      merged.summary = `${merged.summary}\n\n_Note: the ${tierFailures
-        .map((f) => f.tier)
-        .join(" and ")} review pass failed, so ${unreviewed} were not reviewed._`;
+    // comment silently covers fewer files than it appears to. only a dead deep
+    // tier leaves anything unreviewed now — a dead skim tier's files were
+    // promoted into it, and both dying throws above rather than reaching here.
+    if (tierFailures.some((f) => f.tier === "deep-review")) {
+      merged.summary = `${merged.summary}\n\n_Note: the deep-review pass failed, so ${effectiveDeepPatches.length} file(s) in this PR were not reviewed._`;
     }
 
     const allPatches = [...skimPatches, ...deepPatches];

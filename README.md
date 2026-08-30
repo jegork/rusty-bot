@@ -722,6 +722,14 @@ By default every file gets the same deep review treatment. When cascading is ena
 | **skim** | Lightweight single-pass review — diff-only context, no tools, simplified output schema (no `suggestedFix`, no ticket compliance) |
 | **deep-review** | Full review pipeline — tree-sitter context expansion, code search tools, consensus voting, ticket compliance |
 
+**Tier failures degrade instead of aborting.** A tier runs on a single model (skim always; deep when consensus is off), so a dead upstream there used to take the whole action down. Now:
+
+- If the **skim** tier fails, its files are promoted into the deep-review tier rather than dropped. Deep review runs consensus, so it survives a bad seat — at deep-review cost for those files.
+- If the **deep-review** tier fails, the surviving skim results are still posted and the summary names how many files went unreviewed.
+- If every tier with files fails, the run throws. It never reports "No files required review after triage", which would read as an all-clear.
+
+A response with no text, no tool calls and *no token usage at all* is treated as a dead upstream rather than a parse failure, so the pass fails immediately instead of paying for a full retry trajectory. The raw provider body is logged once on that path.
+
 Enable by setting a triage model:
 
 ```bash

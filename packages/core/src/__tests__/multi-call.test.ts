@@ -851,17 +851,35 @@ describe("runCascadeReview tier failure tolerance", () => {
     runReviewMock.mockReset();
   });
 
-  it("still returns a review when the skim tier's model is dead", async () => {
+  it("promotes the skim files into the deep tier when the skim model is dead", async () => {
+    const deepDiffs: string[] = [];
     runReviewMock.mockImplementation(async (_config, diff, _prMeta, _tickets, opts) => {
       if (opts?.tier === "skim") throw new Error("provider returned an empty completion");
+      deepDiffs.push(diff);
       return makeMockReview(diff);
     });
 
     const result = await runCascadeReview(skimPatches, deepPatches, config, prMetadata, undefined);
 
+    // the skim file was actually reviewed, by the deep tier
+    expect(deepDiffs.join("\n")).toContain("tests/test_auth.py");
     expect(result.findings.length).toBeGreaterThan(0);
-    expect(result.summary).toContain("skim review pass failed");
-    expect(result.summary).toContain("1 skim file(s)");
+    // nothing went unreviewed, so nothing to disclose
+    expect(result.summary).not.toContain("not reviewed");
+  });
+
+  it("does not also list promoted files as out-of-scope context for the deep tier", async () => {
+    runReviewMock.mockImplementation(async (_config, diff, _prMeta, _tickets, opts) => {
+      if (opts?.tier === "skim") throw new Error("provider returned an empty completion");
+      return makeMockReview(diff);
+    });
+
+    await runCascadeReview(skimPatches, deepPatches, config, prMetadata, undefined);
+
+    const deepCalls = runReviewMock.mock.calls.filter((call) => call[4]?.tier !== "skim");
+    for (const call of deepCalls) {
+      expect(call[4]?.otherPrFiles ?? []).not.toContain("tests/test_auth.py");
+    }
   });
 
   it("still returns a review when the deep tier is the one that died", async () => {
@@ -873,10 +891,25 @@ describe("runCascadeReview tier failure tolerance", () => {
     const result = await runCascadeReview(skimPatches, deepPatches, config, prMetadata, undefined);
 
     expect(result.findings.length).toBeGreaterThan(0);
-    expect(result.summary).toContain("deep-review review pass failed");
+    expect(result.summary).toContain("deep-review pass failed");
+    expect(result.summary).toContain("1 file(s)");
   });
 
-  it("throws rather than reporting an all-clear when every tier fails", async () => {
+  it("reviews promoted skim files even when the PR has no deep-review files", async () => {
+    const deepDiffs: string[] = [];
+    runReviewMock.mockImplementation(async (_config, diff, _prMeta, _tickets, opts) => {
+      if (opts?.tier === "skim") throw new Error("provider returned an empty completion");
+      deepDiffs.push(diff);
+      return makeMockReview(diff);
+    });
+
+    const result = await runCascadeReview(skimPatches, [], config, prMetadata, undefined);
+
+    expect(deepDiffs.join("\n")).toContain("tests/test_auth.py");
+    expect(result.summary).not.toContain("not reviewed");
+  });
+
+  it("throws rather than reporting an all-clear when the promotion fails too", async () => {
     runReviewMock.mockRejectedValue(new Error("provider returned an empty completion"));
 
     await expect(

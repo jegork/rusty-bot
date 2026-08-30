@@ -33,6 +33,8 @@ const log = logger.child({ module: "review" });
 
 const STRUCTURED_OUTPUT_VALIDATION_ERROR_ID = "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED";
 
+const EMPTY_PROVIDER_RESPONSE_ERROR_ID = "EMPTY_PROVIDER_RESPONSE";
+
 function isStructuredOutputValidationError(err: unknown): boolean {
   return (
     typeof err === "object" &&
@@ -40,6 +42,36 @@ function isStructuredOutputValidationError(err: unknown): boolean {
     "id" in err &&
     err.id === STRUCTURED_OUTPUT_VALIDATION_ERROR_ID
   );
+}
+
+/**
+ * distinguishes "the provider gave us nothing" from "the model emitted text we
+ * couldn't parse". an upstream failure behind a gateway surfaces as a 200 whose
+ * choice carries no content, no tool calls and — critically — no usage block at
+ * all, which the ai-sdk collapses to finishReason "other" with every token
+ * counter at zero. openrouter does this for gemini-3 reasoning models whose
+ * thought signatures don't survive its /chat/completions shim: the provider
+ * strips the unsigned reasoning_details, the model gets an empty assistant turn
+ * back, and every subsequent step returns empty too.
+ *
+ * zero INPUT tokens is the discriminator — a model that merely produced
+ * unparseable text still bills for the prompt it read. retrying an empty
+ * completion costs a full multi-step trajectory and never succeeds, so callers
+ * fail the pass immediately rather than paying for it twice.
+ */
+function isEmptyProviderResponse(r: unknown): boolean {
+  const resp = r as {
+    text?: unknown;
+    toolCalls?: unknown;
+    usage?: { totalTokens?: unknown; inputTokens?: unknown };
+  };
+  if (typeof resp.text === "string" && resp.text.length > 0) return false;
+  if (Array.isArray(resp.toolCalls) && resp.toolCalls.length > 0) return false;
+  const usage = resp.usage;
+  if (!usage) return true;
+  const noTotal = usage.totalTokens === 0 || usage.totalTokens === undefined;
+  const noInput = usage.inputTokens === 0 || usage.inputTokens === undefined;
+  return noTotal && noInput;
 }
 
 // AI SDK marks transient upstream failures (headers timeout, 5xx, connection reset)
@@ -157,6 +189,22 @@ function readLlmStructuringModel(): string | undefined {
 // didn't expect? we cap text snippets so a multi-megabyte response can't
 // blow up the log line.
 const FAILED_RESPONSE_TEXT_PREVIEW_CHARS = 400;
+
+// the summarized fields above are all post-parse, so they can't tell us what the
+// gateway actually sent. on the empty-completion path that raw body is the only
+// place the upstream failure is named (openrouter puts the provider's own error
+// and its unmapped finish_reason there), so we dump a capped slice of it.
+const RAW_RESPONSE_BODY_PREVIEW_CHARS = 2000;
+
+function previewRawResponseBody(r: unknown): string | undefined {
+  const body = (r as { response?: { body?: unknown } }).response?.body;
+  if (body === undefined) return undefined;
+  try {
+    return JSON.stringify(body).slice(0, RAW_RESPONSE_BODY_PREVIEW_CHARS);
+  } catch {
+    return undefined;
+  }
+}
 
 function summarizeFailedResponse(r: unknown): Record<string, unknown> {
   const resp = r as {
@@ -442,6 +490,28 @@ export async function runReview(
             { ...logBindings, ...summarizeFailedResponse(r) },
             "structured output produced no object — captured diagnostic snapshot",
           );
+
+          // an empty completion is an upstream failure, not a parsing problem.
+          // both retry paths below re-run the model, so letting one through
+          // burns a second full trajectory on a call that returned nothing the
+          // first time. fail the pass now and let the tier/consensus layer
+          // decide whether the review can survive without it.
+          if (isEmptyProviderResponse(r)) {
+            log.error(
+              {
+                ...logBindings,
+                ...summarizeFailedResponse(r),
+                providerMetadata: (r as { providerMetadata?: unknown }).providerMetadata,
+                rawResponseBody: previewRawResponseBody(r),
+              },
+              "provider returned an empty completion — failing pass without retry",
+            );
+            const emptyErr = new Error(
+              "provider returned an empty completion (no text, no tool calls, no token usage) — the upstream model produced nothing",
+            );
+            (emptyErr as Error & { id?: string }).id = EMPTY_PROVIDER_RESPONSE_ERROR_ID;
+            throw emptyErr;
+          }
 
           // CHEAP RETRY: structurer-only on the reviewer's prose. The expensive
           // tool trajectory already ran and produced text — re-running the whole

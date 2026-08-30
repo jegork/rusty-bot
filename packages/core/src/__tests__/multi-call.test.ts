@@ -842,3 +842,62 @@ describe("runCascadeReview", () => {
     }
   });
 });
+
+describe("runCascadeReview tier failure tolerance", () => {
+  const skimPatches = [makePatch("tests/test_auth.py", 20)];
+  const deepPatches = [makePatch("src/auth.ts", 20)];
+
+  beforeEach(() => {
+    runReviewMock.mockReset();
+  });
+
+  it("still returns a review when the skim tier's model is dead", async () => {
+    runReviewMock.mockImplementation(async (_config, diff, _prMeta, _tickets, opts) => {
+      if (opts?.tier === "skim") throw new Error("provider returned an empty completion");
+      return makeMockReview(diff);
+    });
+
+    const result = await runCascadeReview(skimPatches, deepPatches, config, prMetadata, undefined);
+
+    expect(result.findings.length).toBeGreaterThan(0);
+    expect(result.summary).toContain("skim review pass failed");
+    expect(result.summary).toContain("1 skim file(s)");
+  });
+
+  it("still returns a review when the deep tier is the one that died", async () => {
+    runReviewMock.mockImplementation(async (_config, diff, _prMeta, _tickets, opts) => {
+      if (opts?.tier !== "skim") throw new Error("provider returned an empty completion");
+      return makeMockReview(diff);
+    });
+
+    const result = await runCascadeReview(skimPatches, deepPatches, config, prMetadata, undefined);
+
+    expect(result.findings.length).toBeGreaterThan(0);
+    expect(result.summary).toContain("deep-review review pass failed");
+  });
+
+  it("throws rather than reporting an all-clear when every tier fails", async () => {
+    runReviewMock.mockRejectedValue(new Error("provider returned an empty completion"));
+
+    await expect(
+      runCascadeReview(skimPatches, deepPatches, config, prMetadata, undefined),
+    ).rejects.toThrow("cascade review failed");
+  });
+
+  it("does not annotate the summary when every tier succeeded", async () => {
+    runReviewMock.mockImplementation(async (_config, diff) => makeMockReview(diff));
+
+    const result = await runCascadeReview(skimPatches, deepPatches, config, prMetadata, undefined);
+
+    expect(result.summary).not.toContain("review pass failed");
+  });
+
+  it("keeps the no-files-to-review response an all-clear when nothing actually failed", async () => {
+    runReviewMock.mockImplementation(async (_config, diff) => makeMockReview(diff));
+
+    const result = await runCascadeReview([], [], config, prMetadata, undefined);
+
+    expect(result.recommendation).toBe("looks_good");
+    expect(result.summary).toBe("No files required review after triage.");
+  });
+});

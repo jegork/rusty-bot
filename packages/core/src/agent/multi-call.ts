@@ -547,6 +547,40 @@ export async function runCascadeReview(
 
   try {
     const allResults: ReviewResult[] = [];
+    const tierFailures: { tier: ReviewTier; err: unknown; fileCount: number }[] = [];
+
+    // a tier runs on a single model (skim always, deep when consensus is off),
+    // so one dead upstream took the whole action down with it. consensus already
+    // degrades rather than throws (see runConsensusReview's effectiveThreshold),
+    // and a tier deserves the same treatment: review the files we still can and
+    // report the gap. the "every tier failed" case is re-thrown below — silence
+    // there would render as a clean review of nothing.
+    const runTierTolerant = async (
+      patches: FilePatch[],
+      tickets: TicketInfo[] | undefined,
+      tierOptions: RunReviewOptions,
+      tier: ReviewTier,
+    ): Promise<ReviewResult[]> => {
+      try {
+        return await runTieredReview(
+          patches,
+          config,
+          prMetadata,
+          tickets,
+          tierOptions,
+          maxTokens,
+          tier,
+          graphContextConfig,
+        );
+      } catch (err) {
+        tierFailures.push({ tier, err, fileCount: patches.length });
+        logger.warn(
+          { err, tier, fileCount: patches.length, prId: prMetadata.id },
+          "review tier failed; continuing with the remaining tiers",
+        );
+        return [];
+      }
+    };
 
     // when there are no deep-review files but tickets exist,
     // pass ticket context to the skim pass so it's at least visible in the prompt
@@ -554,16 +588,7 @@ export async function runCascadeReview(
     const skimTickets = hasDeepFiles ? undefined : ticketContext;
     const deepTickets = ticketContext;
 
-    const skimResults = await runTieredReview(
-      skimPatches,
-      config,
-      prMetadata,
-      skimTickets,
-      resolvedOptions,
-      maxTokens,
-      "skim",
-      graphContextConfig,
-    );
+    const skimResults = await runTierTolerant(skimPatches, skimTickets, resolvedOptions, "skim");
     allResults.push(...skimResults);
 
     // pass skim file paths to the deep tier so the LLM knows they exist
@@ -578,17 +603,24 @@ export async function runCascadeReview(
           }
         : resolvedOptions;
 
-    const deepResults = await runTieredReview(
+    const deepResults = await runTierTolerant(
       deepPatches,
-      config,
-      prMetadata,
       deepTickets,
       deepOptionsWithSkimContext,
-      maxTokens,
       "deep-review",
-      graphContextConfig,
     );
     allResults.push(...deepResults);
+
+    // no surviving results AND something threw means we reviewed nothing — the
+    // "no files required review" response below would read as an all-clear.
+    if (allResults.length === 0 && tierFailures.length > 0) {
+      throw new AggregateError(
+        tierFailures.map((f) => f.err),
+        `cascade review failed: every tier with files failed (${tierFailures
+          .map((f) => `${f.tier}: ${f.fileCount} file(s)`)
+          .join(", ")})`,
+      );
+    }
 
     if (allResults.length === 0) {
       return {
@@ -605,6 +637,16 @@ export async function runCascadeReview(
     }
 
     const merged = mergeResults(allResults, allResults[0]?.modelUsed ?? "unknown");
+
+    // a surviving tier renders as an ordinary review, so without this the PR
+    // comment silently covers fewer files than it appears to. say which ones
+    // went unreviewed rather than letting absence read as approval.
+    if (tierFailures.length > 0) {
+      const unreviewed = tierFailures.map((f) => `${f.fileCount} ${f.tier} file(s)`).join(" and ");
+      merged.summary = `${merged.summary}\n\n_Note: the ${tierFailures
+        .map((f) => f.tier)
+        .join(" and ")} review pass failed, so ${unreviewed} were not reviewed._`;
+    }
 
     const allPatches = [...skimPatches, ...deepPatches];
     const judgeConfig = resolveJudgeConfig();

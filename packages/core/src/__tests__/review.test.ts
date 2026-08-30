@@ -808,3 +808,97 @@ describe("RUSTY_LOG_AGENT_STEPS", () => {
     expect(() => onStepFinish("not an object")).not.toThrow();
   });
 });
+
+describe("runReview empty provider response", () => {
+  beforeEach(() => {
+    generateMock.mockReset();
+    generateTextMock.mockReset();
+    delete process.env.RUSTY_LLM_STRUCTURING_MODEL;
+  });
+
+  it("fails the pass without retrying when the provider returns nothing at all", async () => {
+    generateMock.mockResolvedValue({
+      object: undefined,
+      text: "",
+      toolCalls: [],
+      usage: { totalTokens: 0, inputTokens: 0, outputTokens: 0 },
+    });
+
+    await expect(runReview(config, "diff", prMetadata)).rejects.toThrow(
+      "provider returned an empty completion",
+    );
+    expect(generateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a wholly absent usage block as an empty completion", async () => {
+    generateMock.mockResolvedValue({ object: undefined, text: "", toolCalls: [] });
+
+    await expect(runReview(config, "diff", prMetadata)).rejects.toThrow(
+      "provider returned an empty completion",
+    );
+    expect(generateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the structurer-only retry too — there is no prose to restructure", async () => {
+    process.env.RUSTY_LLM_STRUCTURING_MODEL = "test-structurer";
+    generateMock.mockResolvedValue({
+      object: undefined,
+      text: "",
+      usage: { totalTokens: 0, inputTokens: 0 },
+    });
+
+    await expect(runReview(config, "diff", prMetadata)).rejects.toThrow(
+      "provider returned an empty completion",
+    );
+    expect(generateTextMock).not.toHaveBeenCalled();
+    expect(generateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still retries when the model billed input tokens but emitted no parseable object", async () => {
+    // the model read the prompt and produced something — that's a parsing
+    // failure, not a dead upstream, so the existing retry must still apply.
+    generateMock
+      .mockResolvedValueOnce({
+        object: undefined,
+        text: "",
+        usage: { totalTokens: 900, inputTokens: 900, outputTokens: 0 },
+      })
+      .mockResolvedValueOnce(makeValidResponse());
+
+    const result = await runReview(config, "diff", prMetadata);
+
+    expect(result.recommendation).toBe("looks_good");
+    expect(generateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not treat a zero-usage response carrying text as empty", async () => {
+    generateMock
+      .mockResolvedValueOnce({
+        object: undefined,
+        text: "prose the parser choked on",
+        usage: { totalTokens: 0, inputTokens: 0 },
+      })
+      .mockResolvedValueOnce(makeValidResponse());
+
+    const result = await runReview(config, "diff", prMetadata);
+
+    expect(result.recommendation).toBe("looks_good");
+    expect(generateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not treat a zero-usage response carrying tool calls as empty", async () => {
+    generateMock
+      .mockResolvedValueOnce({
+        object: undefined,
+        text: "",
+        toolCalls: [{ toolName: "search_code" }],
+        usage: { totalTokens: 0, inputTokens: 0 },
+      })
+      .mockResolvedValueOnce(makeValidResponse());
+
+    const result = await runReview(config, "diff", prMetadata);
+
+    expect(result.recommendation).toBe("looks_good");
+    expect(generateMock).toHaveBeenCalledTimes(2);
+  });
+});

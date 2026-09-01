@@ -511,6 +511,51 @@ describe("judgeReviewResult", () => {
     expect(result.summary).toBe("test review");
   });
 
+  it("keeps an elevated critical_issues recommendation when only a warning survives judging", async () => {
+    const review: ReviewResult = {
+      ...makeReviewResult([makeFinding({ severity: "warning", message: "surviving warning" })]),
+      recommendation: "critical_issues",
+      consensusMetadata: {
+        passes: 3,
+        threshold: 2,
+        effectiveThreshold: 2,
+        degraded: false,
+        agreementRate: 1,
+        recommendationElevated: true,
+        passRecommendations: ["critical_issues", "critical_issues", "address_before_merge"],
+        failedPasses: 0,
+      },
+    };
+
+    generateMock.mockResolvedValueOnce({
+      object: {
+        evaluations: [{ index: 0, confidence: 9, reasoning: "real" }],
+      },
+      usage: { totalTokens: 200 },
+    });
+
+    const result = await judgeReviewResult(review, PATCHES, { enabled: true, threshold: 6 });
+    expect(result.findings).toHaveLength(1);
+    expect(result.recommendation).toBe("critical_issues");
+  });
+
+  it("derives looks_good when only a suggestion survives judging and nothing is elevated", async () => {
+    const review = makeReviewResult([
+      makeFinding({ severity: "suggestion", message: "style nit" }),
+    ]);
+
+    generateMock.mockResolvedValueOnce({
+      object: {
+        evaluations: [{ index: 0, confidence: 9, reasoning: "valid but a nit" }],
+      },
+      usage: { totalTokens: 200 },
+    });
+
+    const result = await judgeReviewResult(review, PATCHES, { enabled: true, threshold: 6 });
+    expect(result.findings).toHaveLength(1);
+    expect(result.recommendation).toBe("looks_good");
+  });
+
   it("passes droppedFindings through unchanged when judge runs", async () => {
     const review: ReviewResult = {
       ...makeReviewResult([makeFinding()]),

@@ -12,6 +12,7 @@ import {
 } from "./model.js";
 import type { FilePatch, Finding, Hunk, ReviewResult } from "../types.js";
 import { logger } from "../logger.js";
+import { deriveMergedRecommendation } from "./recommendation.js";
 
 const EXCERPT_NO_HUNK =
   "[no matching hunk for this finding — line is outside the diff or the file isn't in the PR]";
@@ -294,19 +295,10 @@ export async function judgeReviewResult(
 
   const { accepted, rejected, tokenCount } = await judgeFindings(result.findings, patches, config);
 
-  // when consensus elevated the recommendation based on pass votes (not findings),
-  // and there are no findings for the judge to evaluate, preserve it
-  const shouldPreserveElevated =
-    accepted.length === 0 && result.consensusMetadata?.recommendationElevated === true;
-
-  const criticalCount = accepted.filter((f) => f.severity === "critical").length;
-  const recommendation = shouldPreserveElevated
-    ? result.recommendation
-    : criticalCount > 0
-      ? ("critical_issues" as const)
-      : accepted.length > 0
-        ? ("address_before_merge" as const)
-        : ("looks_good" as const);
+  // the judge never evaluated pass votes, only findings — so an elevated
+  // recommendation survives judging regardless of what happens to the findings
+  const elevated = result.consensusMetadata?.recommendationElevated ? [result.recommendation] : [];
+  const recommendation = deriveMergedRecommendation(accepted, elevated);
 
   return {
     ...result,

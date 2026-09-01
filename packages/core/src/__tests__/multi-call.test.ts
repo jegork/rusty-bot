@@ -678,6 +678,131 @@ describe("mergeResults", () => {
     const merged = mergeResults([r1, r1], "test-model");
     expect(merged.droppedFindings).toBeUndefined();
   });
+
+  it("does not let an elevated-but-findings-empty chunk override another chunk's critical finding", () => {
+    const elevatedResult: ReviewResult = {
+      summary: "elevated chunk",
+      recommendation: "address_before_merge",
+      findings: [],
+      observations: [],
+      ticketCompliance: [],
+      missingTests: [],
+      filesReviewed: ["a.ts"],
+      modelUsed: "test-model",
+      tokenCount: 10,
+      consensusMetadata: {
+        passes: 3,
+        threshold: 2,
+        effectiveThreshold: 2,
+        degraded: false,
+        agreementRate: 0,
+        recommendationElevated: true,
+        passRecommendations: ["address_before_merge", "address_before_merge", "looks_good"],
+        failedPasses: 0,
+      },
+    };
+
+    const criticalResult: ReviewResult = {
+      summary: "critical chunk",
+      recommendation: "critical_issues",
+      findings: [
+        {
+          file: "b.ts",
+          line: 1,
+          endLine: 1,
+          severity: "critical",
+          category: "bugs",
+          message: "real bug",
+          suggestedFix: null,
+        },
+      ],
+      observations: [],
+      ticketCompliance: [],
+      missingTests: [],
+      filesReviewed: ["b.ts"],
+      modelUsed: "test-model",
+      tokenCount: 10,
+    };
+
+    const merged = mergeResults([elevatedResult, criticalResult], "test-model");
+    expect(merged.recommendation).toBe("critical_issues");
+  });
+
+  it("consults every chunk's elevated recommendation, not just the first with consensusMetadata", () => {
+    const firstMetadataChunk: ReviewResult = {
+      summary: "first chunk, not elevated",
+      recommendation: "looks_good",
+      findings: [],
+      observations: [],
+      ticketCompliance: [],
+      missingTests: [],
+      filesReviewed: ["a.ts"],
+      modelUsed: "test-model",
+      tokenCount: 10,
+      consensusMetadata: {
+        passes: 3,
+        threshold: 2,
+        effectiveThreshold: 2,
+        degraded: false,
+        agreementRate: 1,
+        recommendationElevated: false,
+        passRecommendations: ["looks_good", "looks_good", "looks_good"],
+        failedPasses: 0,
+      },
+    };
+
+    const secondElevatedChunk: ReviewResult = {
+      summary: "second chunk, elevated",
+      recommendation: "address_before_merge",
+      findings: [],
+      observations: [],
+      ticketCompliance: [],
+      missingTests: [],
+      filesReviewed: ["b.ts"],
+      modelUsed: "test-model",
+      tokenCount: 10,
+      consensusMetadata: {
+        passes: 3,
+        threshold: 2,
+        effectiveThreshold: 2,
+        degraded: false,
+        agreementRate: 0,
+        recommendationElevated: true,
+        passRecommendations: ["address_before_merge", "address_before_merge", "looks_good"],
+        failedPasses: 0,
+      },
+    };
+
+    const merged = mergeResults([firstMetadataChunk, secondElevatedChunk], "test-model");
+    expect(merged.recommendation).toBe("address_before_merge");
+  });
+
+  it("derives looks_good for a single chunk whose only finding is a suggestion", () => {
+    const suggestionOnly: ReviewResult = {
+      summary: "style nit",
+      recommendation: "address_before_merge",
+      findings: [
+        {
+          file: "a.ts",
+          line: 1,
+          endLine: 1,
+          severity: "suggestion",
+          category: "style",
+          message: "consider renaming this variable",
+          suggestedFix: null,
+        },
+      ],
+      observations: [],
+      ticketCompliance: [],
+      missingTests: [],
+      filesReviewed: ["a.ts"],
+      modelUsed: "test-model",
+      tokenCount: 10,
+    };
+
+    const merged = mergeResults([suggestionOnly], "test-model");
+    expect(merged.recommendation).toBe("looks_good");
+  });
 });
 
 describe("runCascadeReview", () => {

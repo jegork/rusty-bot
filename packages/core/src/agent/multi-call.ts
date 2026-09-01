@@ -21,6 +21,7 @@ import type { OpenGrepFinding } from "../opengrep/types.js";
 import { runReview, type RunReviewOptions, type ReviewTier } from "./review.js";
 import { runConsensusReview } from "./consensus.js";
 import { judgeReviewResult, resolveJudgeConfig } from "./judge.js";
+import { deriveMergedRecommendation } from "./recommendation.js";
 import { resolveReviewPassModelConfigs } from "./model.js";
 import type { McpServerConfig } from "../mcp/types.js";
 import { connectMcpServers } from "../mcp/client.js";
@@ -190,8 +191,6 @@ export function mergeResults(results: ReviewResult[], modelUsed: string): Review
     }
   }
 
-  const criticalCount = dedupedFindings.filter((f) => f.severity === "critical").length;
-
   const summaries = results.map((r) => r.summary).filter(Boolean);
   const summary =
     summaries.length === 1
@@ -201,18 +200,13 @@ export function mergeResults(results: ReviewResult[], modelUsed: string): Review
   const triageStats = results.find((r) => r.triageStats)?.triageStats;
   const consensusMetadata = results.find((r) => r.consensusMetadata)?.consensusMetadata;
 
-  // preserve elevated recommendations from consensus passes even after merging
-  const elevatedRecommendation = consensusMetadata?.recommendationElevated
-    ? results.find((r) => r.consensusMetadata?.recommendationElevated)?.recommendation
-    : undefined;
+  // preserve elevated recommendations from every consensus pass, not just the
+  // first chunk carrying consensusMetadata — findings still set the floor
+  const elevatedRecommendations = results
+    .filter((r) => r.consensusMetadata?.recommendationElevated)
+    .map((r) => r.recommendation);
 
-  const recommendation =
-    elevatedRecommendation ??
-    (criticalCount > 0
-      ? ("critical_issues" as const)
-      : dedupedFindings.length > 0
-        ? ("address_before_merge" as const)
-        : ("looks_good" as const));
+  const recommendation = deriveMergedRecommendation(dedupedFindings, elevatedRecommendations);
 
   return {
     summary,

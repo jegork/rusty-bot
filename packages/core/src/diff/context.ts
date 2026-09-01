@@ -74,6 +74,13 @@ function expandHunkToScope(hunk: Hunk, fileLines: string[], expansion: TreeSitte
   expandedStart = Math.max(1, expandedStart);
   expandedEnd = Math.min(fileLines.length, expandedEnd);
 
+  // the expansion window must always contain the original hunk — a scope that
+  // begins inside the hunk's leading context (common when the first changed
+  // line is a function's first line) must not shift newStart forward, or every
+  // rendered line label drifts and findings get dropped as outside-hunk
+  expandedStart = Math.min(expandedStart, hunk.newStart);
+  expandedEnd = Math.max(expandedEnd, hunk.newStart + hunk.newLines - 1);
+
   const hunkContentLines = hunk.content.split("\n");
 
   const beforeLines: string[] = [];

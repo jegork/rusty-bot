@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { expandToScopeBoundaries, getGrammarForFile } from "../diff/treesitter.js";
 import { expandContext } from "../diff/context.js";
-import type { FilePatch } from "../types.js";
+import type { FilePatch, Hunk } from "../types.js";
 
 describe("getGrammarForFile", () => {
   it("maps .ts to typescript", () => {
@@ -593,5 +593,114 @@ describe("sibling signature line numbering", () => {
     const labelled = compressed.split("\n").find((l) => l.startsWith("6 "));
     expect(labelled).toBeDefined();
     expect(labelled).toContain("trimmed.toUpperCase()");
+  });
+});
+
+describe("expansion window contains the original hunk", () => {
+  const fetcher = (_path: string) => Promise.resolve(tsFileContent);
+
+  it("clamps the expansion start to the hunk start when the scope begins after it (leading context precedes the function)", async () => {
+    // hunk starts at the blank line before processData (L4-L8); the change
+    // itself (L6) is inside the function, so the scope (starts at L4) begins
+    // after the hunk's own start (L3)
+    const originalHunk: Hunk = {
+      oldStart: 3,
+      oldLines: 4,
+      newStart: 3,
+      newLines: 5,
+      content: [
+        " ",
+        " export function processData(input: string): string {",
+        "   const trimmed = input.trim();",
+        "+  const upper = trimmed.toUpperCase();",
+        "   return upper;",
+      ].join("\n"),
+    };
+
+    const [expanded] = await expandContext(
+      [
+        {
+          path: "src/processor.ts",
+          additions: 1,
+          deletions: 0,
+          isBinary: false,
+          hunks: [originalHunk],
+        },
+      ],
+      fetcher,
+      5,
+    );
+    const hunk = expanded.hunks[0];
+
+    expect(hunk.newStart).toBeLessThanOrEqual(originalHunk.newStart);
+
+    const bodyRowCount = hunk.content.split("\n").filter((l) => !l.startsWith("~")).length;
+    const removedLineCount = hunk.content.split("\n").filter((l) => l.startsWith("-")).length;
+    expect(bodyRowCount).toBe(hunk.newLines + removedLineCount);
+  });
+
+  it("clamps the expansion end to the hunk end when the scope ends before it (trailing context extends past the function)", async () => {
+    // hunk covers L12-L16, but the change itself (L12) is inside
+    // validateInput (L10-L14), so the scope ends (L14) before the hunk's own
+    // end (L16, into the blank line and the next class declaration)
+    const originalHunk: Hunk = {
+      oldStart: 12,
+      oldLines: 4,
+      newStart: 12,
+      newLines: 5,
+      content: [
+        "+  if (input.length > 100) return false;",
+        "   return true;",
+        " }",
+        " ",
+        " export class DataProcessor {",
+      ].join("\n"),
+    };
+
+    const [expanded] = await expandContext(
+      [
+        {
+          path: "src/processor.ts",
+          additions: 1,
+          deletions: 0,
+          isBinary: false,
+          hunks: [originalHunk],
+        },
+      ],
+      fetcher,
+      5,
+    );
+    const hunk = expanded.hunks[0];
+
+    const originalEnd = originalHunk.newStart + originalHunk.newLines - 1;
+    const expandedEnd = hunk.newStart + hunk.newLines - 1;
+    expect(expandedEnd).toBeGreaterThanOrEqual(originalEnd);
+  });
+
+  it("keeps the window containing the original hunk on the happy path (scope starts before and ends after)", async () => {
+    const patch: FilePatch = {
+      path: "src/processor.ts",
+      additions: 1,
+      deletions: 0,
+      isBinary: false,
+      hunks: [
+        {
+          oldStart: 6,
+          oldLines: 1,
+          newStart: 6,
+          newLines: 2,
+          content: " const upper = trimmed.toUpperCase();\n+  console.log(upper);",
+        },
+      ],
+    };
+    const originalHunk = patch.hunks[0];
+
+    const [expanded] = await expandContext([patch], fetcher, 5);
+    const hunk = expanded.hunks[0];
+
+    expect(hunk.newStart).toBeLessThanOrEqual(originalHunk.newStart);
+    const originalEnd = originalHunk.newStart + originalHunk.newLines - 1;
+    const expandedEnd = hunk.newStart + hunk.newLines - 1;
+    expect(expandedEnd).toBeGreaterThanOrEqual(originalEnd);
   });
 });

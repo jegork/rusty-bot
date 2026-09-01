@@ -5,6 +5,7 @@ export default defineConfig({
     projects: [
       "packages/core",
       "packages/github",
+      "packages/github-action",
       "packages/azure-devops",
       "packages/gitlab",
       "packages/cli",

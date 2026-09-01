@@ -10,6 +10,7 @@ import {
   type GitProvider,
   type PRMetadata,
 } from "@rusty-bot/core";
+import { gitEnv } from "./git-env.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -37,6 +38,7 @@ export class LocalGitProvider implements GitProvider {
     const { stdout } = await execFileAsync("git", args, {
       cwd: this.opts.repoPath,
       maxBuffer: 64 * 1024 * 1024,
+      env: gitEnv(),
     });
     return stdout;
   }

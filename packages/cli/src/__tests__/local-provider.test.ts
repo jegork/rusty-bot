@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LocalGitProvider } from "../local-provider.js";
+import { gitEnv } from "../git-env.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,7 +29,7 @@ const GIT_IDENTITY_ENV = {
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", args, {
     cwd,
-    env: { ...process.env, ...GIT_IDENTITY_ENV },
+    env: gitEnv(GIT_IDENTITY_ENV),
   });
   return stdout.trim();
 }
@@ -193,6 +194,50 @@ describe("LocalGitProvider (integration)", () => {
       });
       expect(await provider.searchCode("")).toEqual([]);
       expect(await provider.searchCode("   ")).toEqual([]);
+    });
+  });
+
+  describe("ambient git env isolation", () => {
+    // simulates running inside a git hook, which exports GIT_DIR / GIT_WORK_TREE
+    // pointing at the invoking repo. those must not redirect the provider away
+    // from the fixture repo it was explicitly configured with.
+    let bogusGitDir: string;
+    let bogusWorkTree: string;
+    const savedEnv: Record<string, string | undefined> = {};
+
+    beforeEach(async () => {
+      bogusGitDir = await mkdtemp(join(tmpdir(), "rusty-cli-ambient-gitdir-"));
+      bogusWorkTree = await mkdtemp(join(tmpdir(), "rusty-cli-ambient-worktree-"));
+      savedEnv.GIT_DIR = process.env.GIT_DIR;
+      savedEnv.GIT_WORK_TREE = process.env.GIT_WORK_TREE;
+      process.env.GIT_DIR = join(bogusGitDir, ".git");
+      process.env.GIT_WORK_TREE = bogusWorkTree;
+    });
+
+    afterEach(async () => {
+      if (savedEnv.GIT_DIR === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = savedEnv.GIT_DIR;
+      if (savedEnv.GIT_WORK_TREE === undefined) delete process.env.GIT_WORK_TREE;
+      else process.env.GIT_WORK_TREE = savedEnv.GIT_WORK_TREE;
+      await rm(bogusGitDir, { recursive: true, force: true });
+      await rm(bogusWorkTree, { recursive: true, force: true });
+    });
+
+    it("still resolves the configured repo when GIT_DIR/GIT_WORK_TREE point elsewhere", async () => {
+      const provider = new LocalGitProvider({
+        repoPath: repo.path,
+        baseRef: "main",
+        headRef: "feature",
+      });
+
+      const patches = await provider.getDiff();
+      const paths = patches.map((p) => p.path).sort();
+      expect(paths).toEqual(["a.ts", "src/keep.ts"]);
+
+      const meta = await provider.getPRMetadata();
+      expect(meta.targetBranch).toBe("main");
+      expect(meta.sourceBranch).toBe("feature");
+      expect(meta.headSha).toBe(repo.featureSha);
     });
   });
 

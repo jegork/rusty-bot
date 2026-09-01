@@ -266,6 +266,24 @@ describe("formatSummaryComment", () => {
     expect(footerLine).toContain("degraded — judge filtering only");
   });
 
+  it("renders a judge-failure note instead of token/filtered counts when judgeStatus is failed", () => {
+    const review = makeReview({
+      modelUsed: "openai/gpt-5-mini",
+      tokenCount: 5000,
+      judgeStatus: "failed",
+      judgeTokenCount: 0,
+      filteredCount: 0,
+    });
+
+    const footerLine = formatSummaryComment(review)
+      .split("\n")
+      .find((l) => l.startsWith("Reviewed by "));
+    expect(footerLine).toBeDefined();
+    expect(footerLine).toContain("judge pass failed — findings unfiltered");
+    expect(footerLine).not.toContain("tokens (judge)");
+    expect(footerLine).not.toContain("low-confidence findings filtered");
+  });
+
   it("renders a clean review with zero findings", () => {
     const review = makeReview({
       recommendation: "looks_good",

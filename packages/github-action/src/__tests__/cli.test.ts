@@ -1,6 +1,34 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { parseConfig } from "../cli.js";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { Octokit } from "octokit";
+import type * as RustyBotCore from "@rusty-bot/core";
+import type { FilePatch, OpenGrepFinding, PRMetadata } from "@rusty-bot/core";
+import {
+  isCascadeEnabled,
+  parseDiff,
+  runOpenGrep,
+  runTriage,
+  runCascadeReview,
+} from "@rusty-bot/core";
+import { GitHubProvider, createOctokitIssueFetcher } from "@rusty-bot/github";
+import { parseConfig, runAction, type ActionConfig } from "../cli.js";
 import type { PullRequestEvent } from "../event.js";
+
+vi.mock("@rusty-bot/github", () => ({
+  GitHubProvider: vi.fn(),
+  createOctokitIssueFetcher: vi.fn(() => vi.fn()),
+}));
+
+vi.mock("@rusty-bot/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof RustyBotCore>();
+  return {
+    ...actual,
+    isCascadeEnabled: vi.fn(),
+    parseDiff: vi.fn(),
+    runOpenGrep: vi.fn(),
+    runTriage: vi.fn(),
+    runCascadeReview: vi.fn(),
+  };
+});
 
 const BASE_EVENT: PullRequestEvent = {
   action: "opened",
@@ -300,6 +328,117 @@ describe("parseConfig", () => {
 
     expect(parseConfig({ event: BASE_EVENT, env: makeEnv() }).renameTitleToConventional).toBe(
       false,
+    );
+  });
+});
+
+describe("runAction cascade triage wiring", () => {
+  const METADATA: PRMetadata = {
+    id: "1",
+    title: "feat: add stuff",
+    description: "",
+    author: "octocat",
+    sourceBranch: "feature/x",
+    targetBranch: "main",
+    url: "https://github.com/acme/repo/pull/1",
+    headSha: "abc123",
+  };
+
+  const FIXTURE_PATCH: FilePatch = {
+    path: "src/index.ts",
+    hunks: [
+      {
+        oldStart: 1,
+        oldLines: 1,
+        newStart: 1,
+        newLines: 2,
+        content: "+added line\n context line",
+      },
+    ],
+    additions: 1,
+    deletions: 0,
+    isBinary: false,
+  };
+
+  const OPEN_GREP_FINDING: OpenGrepFinding = {
+    ruleId: "test-rule",
+    file: "src/index.ts",
+    startLine: 1,
+    endLine: 1,
+    message: "test finding",
+    severity: "error",
+  };
+
+  function makeMockProvider() {
+    return {
+      getPRMetadata: vi.fn().mockResolvedValue(METADATA),
+      getFileContent: vi.fn().mockResolvedValue(null),
+      deleteExistingBotComments: vi.fn().mockResolvedValue(undefined),
+      getRawDiff: vi.fn().mockResolvedValue(""),
+      getLinkedIssueNumbers: vi.fn().mockResolvedValue([]),
+      postSummaryComment: vi.fn().mockResolvedValue(undefined),
+      postInlineComments: vi.fn().mockResolvedValue(undefined),
+      updatePRTitle: vi.fn().mockResolvedValue(undefined),
+      updatePRDescription: vi.fn().mockResolvedValue(undefined),
+      getLastReviewedSha: vi.fn().mockResolvedValue(null),
+      getDiffSinceSha: vi.fn().mockResolvedValue(null),
+      getPriorReviewContext: vi.fn().mockResolvedValue(null),
+    };
+  }
+
+  beforeEach(() => {
+    vi.mocked(GitHubProvider).mockImplementation(function (this: GitHubProvider) {
+      return Object.assign(this, makeMockProvider()) as unknown as GitHubProvider;
+    });
+    vi.mocked(createOctokitIssueFetcher).mockReturnValue(vi.fn());
+    vi.mocked(isCascadeEnabled).mockReturnValue(true);
+    vi.mocked(parseDiff).mockReturnValue([FIXTURE_PATCH]);
+    vi.mocked(runOpenGrep).mockResolvedValue({
+      available: true,
+      findings: [OPEN_GREP_FINDING],
+      rawCount: 1,
+    });
+    vi.mocked(runTriage).mockResolvedValue({
+      files: [{ path: FIXTURE_PATCH.path, classification: "deep-review", reason: "test" }],
+      modelUsed: "test-triage-model",
+      tokenCount: 50,
+    });
+    vi.mocked(runCascadeReview).mockResolvedValue({
+      summary: "test summary",
+      findings: [],
+      observations: [],
+      ticketCompliance: [],
+      missingTests: [],
+      filesReviewed: [FIXTURE_PATCH.path],
+      recommendation: "looks_good",
+      modelUsed: "test-review-model",
+      tokenCount: 100,
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("passes opengrep findings to runTriage when the cascade path runs", async () => {
+    const config: ActionConfig = {
+      octokit: new Octokit({ auth: "test-token" }),
+      owner: "acme",
+      repo: "repo",
+      pullNumber: 1,
+      token: "test-token",
+      review: { style: "balanced", focusAreas: ["security"], ignorePatterns: [] },
+      failOnCritical: true,
+      generateDescription: false,
+      renameTitleToConventional: false,
+      incrementalReview: false,
+    };
+
+    await runAction(config);
+
+    expect(runTriage).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ path: FIXTURE_PATCH.path })]),
+      [OPEN_GREP_FINDING],
     );
   });
 });

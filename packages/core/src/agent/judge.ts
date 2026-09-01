@@ -13,9 +13,10 @@ import {
 import type { FilePatch, Finding, Hunk, ReviewResult } from "../types.js";
 import { logger } from "../logger.js";
 import { deriveMergedRecommendation } from "./recommendation.js";
+import { normalizePath } from "./multi-call.js";
 
 const EXCERPT_NO_HUNK =
-  "[no matching hunk for this finding — line is outside the diff or the file isn't in the PR]";
+  "(no diff excerpt available for this finding — judge it on its own merits; absence of an excerpt is not evidence against it)";
 
 function findOverlappingHunks(hunks: Hunk[], line: number, endLine: number): Hunk[] {
   return hunks.filter((h) => {
@@ -68,7 +69,7 @@ function formatHunkExcerpt(hunk: Hunk): string[] {
 }
 
 export function buildFindingExcerpt(patches: readonly FilePatch[], finding: Finding): string {
-  const patch = patches.find((p) => p.path === finding.file);
+  const patch = patches.find((p) => normalizePath(p.path) === normalizePath(finding.file));
   if (!patch) return EXCERPT_NO_HUNK;
   const endLine = finding.endLine ?? finding.line;
   const hunks = findOverlappingHunks(patch.hunks, finding.line, endLine);
@@ -95,7 +96,7 @@ interface JudgeEvaluation {
 }
 
 const EvaluationSchema = z.object({
-  index: z.number().describe("zero-based index of the finding being evaluated"),
+  index: z.number().int().min(0).describe("zero-based index of the finding being evaluated"),
   confidence: z
     .number()
     .min(0)
@@ -177,14 +178,34 @@ function resolveJudgeModel(judgeModelOverride?: string) {
   };
 }
 
+const TRUTHY_VALUES = ["true", "1", "yes"];
+
+function resolveEnabled(raw: string | undefined): boolean {
+  if (!raw) return false;
+  const normalized = raw.trim().toLowerCase();
+  if (TRUTHY_VALUES.includes(normalized)) return true;
+  log.warn({ value: raw }, "unrecognized RUSTY_JUDGE_ENABLED value, treating judge as disabled");
+  return false;
+}
+
+function resolveThreshold(raw: string | undefined): number {
+  if (!raw || Number.isNaN(Number(raw))) return 6;
+  const parsed = Number(raw);
+  const clamped = Math.min(10, Math.max(0, parsed));
+  if (clamped !== parsed) {
+    log.warn({ value: raw, clamped }, "RUSTY_JUDGE_THRESHOLD out of the 0-10 range, clamping");
+  }
+  return clamped;
+}
+
 export function resolveJudgeConfig(): JudgeConfig {
   const enabled = process.env.RUSTY_JUDGE_ENABLED;
   const threshold = process.env.RUSTY_JUDGE_THRESHOLD;
   const model = process.env.RUSTY_JUDGE_MODEL;
 
   return {
-    enabled: enabled === "true" || enabled === "1",
-    threshold: threshold && !Number.isNaN(Number(threshold)) ? Number(threshold) : 6,
+    enabled: resolveEnabled(enabled),
+    threshold: resolveThreshold(threshold),
     model: model || undefined,
   };
 }
@@ -194,6 +215,8 @@ export interface JudgeResult {
   rejected: Finding[];
   evaluations: JudgeEvaluation[];
   tokenCount: number;
+  /** set only when the judge call errored or returned unusable evaluations; callers should treat this as fail-open, not as a healthy zero-filter run */
+  failed?: true;
 }
 
 export async function judgeFindings(
@@ -226,7 +249,12 @@ export async function judgeFindings(
   let evaluations: JudgeEvaluation[];
   let tokenCount = 0;
   try {
-    const modelSettings = applyModelConstraints(modelConfig, resolveModelSettings("judge"));
+    // default to temperature 0 for reproducible scores; env vars (spread after)
+    // and hard provider locks (applied by applyModelConstraints) still win
+    const modelSettings = applyModelConstraints(modelConfig, {
+      temperature: 0,
+      ...resolveModelSettings("judge"),
+    });
     const jsonPromptInjection = resolveJsonPromptInjection(modelConfig);
     const response = await agent.generate(userMessage, {
       structuredOutput: { schema: JudgeOutputSchema, jsonPromptInjection },
@@ -236,31 +264,99 @@ export async function judgeFindings(
     tokenCount = response.usage.totalTokens ?? 0;
   } catch (err) {
     log.warn({ err }, "judge pass failed, keeping all findings");
-    return { accepted: [...findings], rejected: [], evaluations: [], tokenCount: 0 };
+    return { accepted: [...findings], rejected: [], evaluations: [], tokenCount: 0, failed: true };
   }
 
-  // build a lookup so we handle models returning fewer or out-of-order evaluations
-  const evalByIndex = new Map(evaluations.map((e) => [e.index, e]));
+  // build a lookup so we handle models returning fewer, out-of-order, or
+  // malformed evaluations. out-of-range indices are dropped (and counted);
+  // duplicate indices keep the last evaluation seen for that index.
+  let duplicateCount = 0;
+  let outOfRangeCount = 0;
+  const evalByIndex = new Map<number, JudgeEvaluation>();
+  for (const e of evaluations) {
+    if (e.index >= findings.length) {
+      outOfRangeCount++;
+      continue;
+    }
+    if (evalByIndex.has(e.index)) duplicateCount++;
+    evalByIndex.set(e.index, e);
+  }
+  if (duplicateCount > 0 || outOfRangeCount > 0) {
+    log.warn(
+      {
+        duplicateCount,
+        outOfRangeCount,
+        evaluationCount: evaluations.length,
+        findingCount: findings.length,
+      },
+      "judge returned malformed evaluation indices",
+    );
+  }
+
+  // every returned evaluation pointed outside the finding list — most likely
+  // 1-based indexing from the model. none of the scores can be trusted, so
+  // fail open the same way a thrown call does.
+  if (evaluations.length > 0 && evalByIndex.size === 0) {
+    log.warn(
+      { evaluationCount: evaluations.length, findingCount: findings.length },
+      "judge returned no usable evaluations (all indices out of range) — treating as judge failure",
+    );
+    return { accepted: [...findings], rejected: [], evaluations: [], tokenCount: 0, failed: true };
+  }
+
+  if (evaluations.length !== findings.length) {
+    log.warn(
+      { evaluationCount: evaluations.length, findingCount: findings.length },
+      "judge returned a different number of evaluations than findings",
+    );
+  }
+
   const accepted: Finding[] = [];
   const rejected: Finding[] = [];
   const rejectedWithEval: { finding: Finding; evaluation: JudgeEvaluation }[] = [];
   const resolvedEvaluations: JudgeEvaluation[] = [];
+  const scoreLogEntries: {
+    file: string;
+    line: number;
+    severity: Finding["severity"];
+    category: Finding["category"];
+    voteCount: number | undefined;
+    confidence: number;
+    accepted: boolean;
+    defaulted: boolean;
+    reasoning: string;
+  }[] = [];
 
   for (let i = 0; i < findings.length; i++) {
     const evaluation = evalByIndex.get(i);
+    const defaulted = !evaluation;
     const resolved: JudgeEvaluation = evaluation ?? {
       index: i,
       confidence: config.threshold,
-      reasoning: "no evaluation returned",
+      reasoning: "no evaluation returned — accepted by default",
     };
     resolvedEvaluations.push(resolved);
 
-    if (resolved.confidence >= config.threshold) {
+    // a finding with no evaluation is fail-open: never dropped for lack of a score
+    const isAccepted = defaulted || resolved.confidence >= config.threshold;
+    if (isAccepted) {
       accepted.push(findings[i]);
     } else {
       rejected.push(findings[i]);
       rejectedWithEval.push({ finding: findings[i], evaluation: resolved });
     }
+
+    scoreLogEntries.push({
+      file: findings[i].file,
+      line: findings[i].line,
+      severity: findings[i].severity,
+      category: findings[i].category,
+      voteCount: findings[i].voteCount,
+      confidence: resolved.confidence,
+      accepted: isAccepted,
+      defaulted,
+      reasoning: resolved.reasoning,
+    });
   }
 
   for (const { finding, evaluation } of rejectedWithEval) {
@@ -273,6 +369,18 @@ export async function judgeFindings(
         reasoning: evaluation.reasoning,
       },
       "finding filtered by judge",
+    );
+  }
+
+  // gated by RUSTY_LOG_JUDGE_SCORES=true. emits every per-finding score (not
+  // just rejections) so the threshold can actually be calibrated from data —
+  // see FOLLOWUPS.md item 2. info level (not debug) since this is the whole
+  // point of the flag. no diff/suggestedFix content, so output stays safe to
+  // export as an artifact.
+  if (process.env.RUSTY_LOG_JUDGE_SCORES === "true") {
+    log.info(
+      { model: displayName, threshold: config.threshold, evaluations: scoreLogEntries },
+      "judge per-finding scores",
     );
   }
 
@@ -293,7 +401,11 @@ export async function judgeReviewResult(
     return result;
   }
 
-  const { accepted, rejected, tokenCount } = await judgeFindings(result.findings, patches, config);
+  const { accepted, rejected, tokenCount, failed } = await judgeFindings(
+    result.findings,
+    patches,
+    config,
+  );
 
   // the judge never evaluated pass votes, only findings — so an elevated
   // recommendation survives judging regardless of what happens to the findings
@@ -304,7 +416,10 @@ export async function judgeReviewResult(
     ...result,
     findings: accepted,
     recommendation,
-    filteredCount: rejected.length,
-    judgeTokenCount: tokenCount,
+    judgeStatus: failed ? "failed" : "ok",
+    // a failed judge kept every finding — filteredCount/judgeTokenCount would
+    // render as "0 filtered · 0 tokens", indistinguishable from a healthy
+    // no-op run. leave them undefined so the footer can tell the difference.
+    ...(failed ? {} : { filteredCount: rejected.length, judgeTokenCount: tokenCount }),
   };
 }

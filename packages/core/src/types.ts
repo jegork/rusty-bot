@@ -100,6 +100,8 @@ export interface ReviewResult extends ReviewOutput {
   filteredCount?: number;
   /** tokens consumed by the judge pass */
   judgeTokenCount?: number;
+  /** "failed" when the judge errored or returned unusable output; undefined when the judge was disabled */
+  judgeStatus?: "ok" | "failed";
   consensusMetadata?: ConsensusMetadata;
   droppedFindings?: DroppedFinding[];
   openGrepStats?: OpenGrepStats;

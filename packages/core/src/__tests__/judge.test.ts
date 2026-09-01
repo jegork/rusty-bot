@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { FilePatch, Finding, ReviewResult } from "../types.js";
+import { logger } from "../logger.js";
 
 const generateMock = vi.fn();
 
@@ -122,6 +123,52 @@ describe("resolveJudgeConfig", () => {
   it("treats empty RUSTY_JUDGE_MODEL as undefined", () => {
     process.env.RUSTY_JUDGE_MODEL = "";
     expect(resolveJudgeConfig().model).toBeUndefined();
+  });
+
+  it("parses RUSTY_JUDGE_ENABLED=TRUE case-insensitively", () => {
+    process.env.RUSTY_JUDGE_ENABLED = "TRUE";
+    expect(resolveJudgeConfig().enabled).toBe(true);
+  });
+
+  it("parses RUSTY_JUDGE_ENABLED=yes", () => {
+    process.env.RUSTY_JUDGE_ENABLED = "yes";
+    expect(resolveJudgeConfig().enabled).toBe(true);
+  });
+
+  it("disables and warns on an unrecognized RUSTY_JUDGE_ENABLED value", () => {
+    process.env.RUSTY_JUDGE_ENABLED = "banana";
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(vi.fn());
+
+    expect(resolveJudgeConfig().enabled).toBe(false);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("clamps RUSTY_JUDGE_THRESHOLD above 10 down to 10 with a warn", () => {
+    process.env.RUSTY_JUDGE_THRESHOLD = "11";
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(vi.fn());
+
+    expect(resolveJudgeConfig().threshold).toBe(10);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("clamps RUSTY_JUDGE_THRESHOLD below 0 up to 0 with a warn", () => {
+    process.env.RUSTY_JUDGE_THRESHOLD = "-1";
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(vi.fn());
+
+    expect(resolveJudgeConfig().threshold).toBe(0);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("clamps RUSTY_JUDGE_THRESHOLD=Infinity down to 10 with a warn", () => {
+    process.env.RUSTY_JUDGE_THRESHOLD = "Infinity";
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(vi.fn());
+
+    expect(resolveJudgeConfig().threshold).toBe(10);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });
 
@@ -271,6 +318,9 @@ describe("judgeFindings", () => {
     // first finding passes, remaining two have no evaluation → kept (safe default)
     expect(result.accepted).toHaveLength(3);
     expect(result.rejected).toHaveLength(0);
+    // the defaulted evaluations carry a distinct marker so calibration queries can exclude them
+    expect(result.evaluations[1].reasoning).toContain("accepted by default");
+    expect(result.evaluations[2].reasoning).toContain("accepted by default");
   });
 
   it("keeps all findings when judge call throws", async () => {
@@ -283,6 +333,70 @@ describe("judgeFindings", () => {
     expect(result.rejected).toHaveLength(0);
     expect(result.evaluations).toHaveLength(0);
     expect(result.tokenCount).toBe(0);
+    expect(result.failed).toBe(true);
+  });
+
+  it("keeps the last evaluation and warns when the model returns a duplicate index", async () => {
+    const findings = [makeFinding({ message: "only finding" })];
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(vi.fn());
+
+    generateMock.mockResolvedValueOnce({
+      object: {
+        evaluations: [
+          { index: 0, confidence: 2, reasoning: "first pass, low" },
+          { index: 0, confidence: 9, reasoning: "second pass, high (last wins)" },
+        ],
+      },
+      usage: { totalTokens: 200 },
+    });
+
+    const result = await judgeFindings(findings, PATCHES, enabledConfig);
+    expect(result.accepted).toHaveLength(1);
+    expect(result.evaluations[0].reasoning).toBe("second pass, high (last wins)");
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("ignores an out-of-range index and warns, but still resolves the real finding", async () => {
+    const findings = [makeFinding({ message: "only finding" })];
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(vi.fn());
+
+    generateMock.mockResolvedValueOnce({
+      object: {
+        evaluations: [
+          { index: 0, confidence: 9, reasoning: "valid, in range" },
+          { index: 5, confidence: 1, reasoning: "out of range, should be dropped" },
+        ],
+      },
+      usage: { totalTokens: 200 },
+    });
+
+    const result = await judgeFindings(findings, PATCHES, enabledConfig);
+    expect(result.accepted).toHaveLength(1);
+    expect(result.evaluations[0].reasoning).toBe("valid, in range");
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("treats all-out-of-range evaluations (1-based indexing) as a judge failure and fails open", async () => {
+    const findings = [makeFinding({ message: "only finding" })];
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(vi.fn());
+
+    generateMock.mockResolvedValueOnce({
+      object: {
+        // 1-based indexing on a single finding: index 1 is out of range for a
+        // 1-element (0-based) list, so nothing maps — none of the evaluations are usable
+        evaluations: [{ index: 1, confidence: 1, reasoning: "bad" }],
+      },
+      usage: { totalTokens: 200 },
+    });
+
+    const result = await judgeFindings(findings, PATCHES, enabledConfig);
+    expect(result.accepted).toHaveLength(1);
+    expect(result.rejected).toHaveLength(0);
+    expect(result.failed).toBe(true);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 
   it("respects custom threshold", async () => {
@@ -349,6 +463,97 @@ describe("judgeFindings", () => {
     // "Could not find config for provider azure-openai"
     expect(resolveWithOverrideSpy).toHaveBeenCalledWith("azure-openai/gpt-5.4-mini");
   });
+
+  it("defaults judge temperature to 0 when no temperature is configured", async () => {
+    const modelModule = await import("../agent/model.js");
+    const applyConstraintsSpy = vi.mocked(modelModule.applyModelConstraints);
+    applyConstraintsSpy.mockClear();
+
+    generateMock.mockResolvedValueOnce({
+      object: { evaluations: [{ index: 0, confidence: 9, reasoning: "ok" }] },
+      usage: { totalTokens: 200 },
+    });
+
+    await judgeFindings([makeFinding()], PATCHES, enabledConfig);
+
+    expect(applyConstraintsSpy).toHaveBeenCalledWith(expect.anything(), { temperature: 0 });
+  });
+
+  it("lets an explicit RUSTY_JUDGE_TEMPERATURE override the temperature-0 default", async () => {
+    const modelModule = await import("../agent/model.js");
+    const applyConstraintsSpy = vi.mocked(modelModule.applyModelConstraints);
+    applyConstraintsSpy.mockClear();
+    vi.mocked(modelModule.resolveModelSettings).mockReturnValueOnce({ temperature: 0.7 });
+
+    generateMock.mockResolvedValueOnce({
+      object: { evaluations: [{ index: 0, confidence: 9, reasoning: "ok" }] },
+      usage: { totalTokens: 200 },
+    });
+
+    await judgeFindings([makeFinding()], PATCHES, enabledConfig);
+
+    expect(applyConstraintsSpy).toHaveBeenCalledWith(expect.anything(), { temperature: 0.7 });
+  });
+});
+
+describe("RUSTY_LOG_JUDGE_SCORES", () => {
+  beforeEach(() => {
+    generateMock.mockReset();
+    delete process.env.RUSTY_LOG_JUDGE_SCORES;
+  });
+
+  afterEach(() => {
+    delete process.env.RUSTY_LOG_JUDGE_SCORES;
+  });
+
+  it("does not emit score logs by default", async () => {
+    const infoSpy = vi.spyOn(logger, "info");
+    generateMock.mockResolvedValueOnce({
+      object: { evaluations: [{ index: 0, confidence: 9, reasoning: "ok" }] },
+      usage: { totalTokens: 200 },
+    });
+
+    await judgeFindings([makeFinding()], PATCHES, { enabled: true, threshold: 6 });
+
+    const scoreCalls = infoSpy.mock.calls.filter(
+      (c) => typeof c[1] === "string" && c[1].includes("judge per-finding scores"),
+    );
+    expect(scoreCalls).toHaveLength(0);
+    infoSpy.mockRestore();
+  });
+
+  it("emits one info record with a per-finding entry for every finding when the flag is 'true'", async () => {
+    process.env.RUSTY_LOG_JUDGE_SCORES = "true";
+    const infoSpy = vi.spyOn(logger, "info");
+    const findings = [
+      makeFinding({ message: "first" }),
+      makeFinding({ line: 2, message: "second" }),
+    ];
+
+    generateMock.mockResolvedValueOnce({
+      object: {
+        evaluations: [
+          { index: 0, confidence: 9, reasoning: "real" },
+          { index: 1, confidence: 2, reasoning: "fake" },
+        ],
+      },
+      usage: { totalTokens: 300 },
+    });
+
+    await judgeFindings(findings, PATCHES, { enabled: true, threshold: 6 });
+
+    const scoreCalls = infoSpy.mock.calls.filter(
+      (c) => typeof c[1] === "string" && c[1].includes("judge per-finding scores"),
+    );
+    expect(scoreCalls).toHaveLength(1);
+    const record = scoreCalls[0][0] as {
+      evaluations: { confidence: number; defaulted: boolean }[];
+    };
+    expect(record.evaluations).toHaveLength(2);
+    expect(record.evaluations[0].confidence).toBe(9);
+    expect(record.evaluations[0].defaulted).toBe(false);
+    infoSpy.mockRestore();
+  });
 });
 
 describe("judgeReviewResult", () => {
@@ -363,6 +568,7 @@ describe("judgeReviewResult", () => {
     expect(result.findings).toHaveLength(1);
     expect(result.filteredCount).toBeUndefined();
     expect(result.judgeTokenCount).toBeUndefined();
+    expect(result.judgeStatus).toBeUndefined();
   });
 
   it("updates filteredCount on the result", async () => {
@@ -386,6 +592,24 @@ describe("judgeReviewResult", () => {
     expect(result.findings).toHaveLength(1);
     expect(result.filteredCount).toBe(1);
     expect(result.judgeTokenCount).toBe(300);
+    expect(result.judgeStatus).toBe("ok");
+  });
+
+  it("marks judgeStatus failed and omits filteredCount/judgeTokenCount when the judge call throws", async () => {
+    const findings = [
+      makeFinding({ message: "keep" }),
+      makeFinding({ line: 2, message: "keep too" }),
+    ];
+    const review = makeReviewResult(findings);
+
+    generateMock.mockRejectedValueOnce(new Error("model unavailable"));
+
+    const result = await judgeReviewResult(review, PATCHES, { enabled: true, threshold: 6 });
+    // fail-open: a broken judge must never drop findings
+    expect(result.findings).toHaveLength(2);
+    expect(result.judgeStatus).toBe("failed");
+    expect(result.filteredCount).toBeUndefined();
+    expect(result.judgeTokenCount).toBeUndefined();
   });
 
   it("recalculates recommendation to looks_good when all findings filtered", async () => {
@@ -647,7 +871,7 @@ describe("buildFindingExcerpt", () => {
     const finding = makeFinding({ file: "src/missing.ts", line: 1 });
     const excerpt = buildFindingExcerpt(PATCHES, finding);
 
-    expect(excerpt).toContain("[no matching hunk");
+    expect(excerpt).toContain("no diff excerpt available");
     expect(excerpt).not.toContain("## src/");
   });
 
@@ -655,7 +879,31 @@ describe("buildFindingExcerpt", () => {
     const finding = makeFinding({ file: "src/app.ts", line: 999 });
     const excerpt = buildFindingExcerpt(PATCHES, finding);
 
-    expect(excerpt).toContain("[no matching hunk");
+    expect(excerpt).toContain("no diff excerpt available");
+  });
+
+  it("matches a finding path with a leading ./ to the patch", () => {
+    const finding = makeFinding({ file: "./src/app.ts", line: 1 });
+    const excerpt = buildFindingExcerpt(PATCHES, finding);
+
+    expect(excerpt.startsWith("## src/app.ts")).toBe(true);
+    expect(excerpt).not.toContain("no diff excerpt available");
+  });
+
+  it("matches a finding path with backslashes to the patch", () => {
+    const finding = makeFinding({ file: "src\\app.ts", line: 1 });
+    const excerpt = buildFindingExcerpt(PATCHES, finding);
+
+    expect(excerpt.startsWith("## src/app.ts")).toBe(true);
+    expect(excerpt).not.toContain("no diff excerpt available");
+  });
+
+  it("matches a finding path with a trailing :line suffix to the patch", () => {
+    const finding = makeFinding({ file: "src/app.ts:42", line: 1 });
+    const excerpt = buildFindingExcerpt(PATCHES, finding);
+
+    expect(excerpt.startsWith("## src/app.ts")).toBe(true);
+    expect(excerpt).not.toContain("no diff excerpt available");
   });
 
   it("picks the second hunk when the finding lands inside it", () => {
@@ -803,6 +1051,6 @@ describe("judge formatter", () => {
     await judgeFindings([finding], PATCHES, { enabled: true, threshold: 6 });
 
     const userMessage = generateMock.mock.calls[0][0] as string;
-    expect(userMessage).toContain("[no matching hunk");
+    expect(userMessage).toContain("no diff excerpt available");
   });
 });

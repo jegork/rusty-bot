@@ -343,11 +343,15 @@ export function formatSummaryComment(
   const reviewerLabel =
     reviewerSource.length > 0 ? Array.from(new Set(reviewerSource)).join(", ") : review.modelUsed;
   const parts = [`Reviewed by ${reviewerLabel} · ${review.tokenCount} tokens (review)`];
-  if (review.judgeTokenCount !== undefined) {
-    parts.push(`${review.judgeTokenCount} tokens (judge)`);
-  }
-  if (review.filteredCount !== undefined) {
-    parts.push(`${review.filteredCount} low-confidence findings filtered`);
+  if (review.judgeStatus === "failed") {
+    parts.push("judge pass failed — findings unfiltered");
+  } else {
+    if (review.judgeTokenCount !== undefined) {
+      parts.push(`${review.judgeTokenCount} tokens (judge)`);
+    }
+    if (review.filteredCount !== undefined) {
+      parts.push(`${review.filteredCount} low-confidence findings filtered`);
+    }
   }
   if (review.consensusMetadata) {
     const cm = review.consensusMetadata;

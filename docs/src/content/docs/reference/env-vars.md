@@ -73,9 +73,10 @@ Per-agent values override the global setting; omitting any value falls back to t
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `RUSTY_JUDGE_ENABLED` | `false` | Enable the post-generation judge / filter pass |
-| `RUSTY_JUDGE_THRESHOLD` | `6` | Minimum confidence score (0–10) to keep a finding |
+| `RUSTY_JUDGE_ENABLED` | `false` | Enable the post-generation judge / filter pass. Parsed case-insensitively (`true`/`1`/`yes`); any other non-empty value is rejected with a warning and the judge stays disabled |
+| `RUSTY_JUDGE_THRESHOLD` | `6` | Minimum confidence score (0–10) to keep a finding. Values outside the range are clamped to `0`/`10` with a warning |
 | `RUSTY_JUDGE_MODEL` | same as `RUSTY_LLM_MODEL` | Model for the judge (can be a cheaper model) |
+| `RUSTY_LOG_JUDGE_SCORES` | `false` | Log every judge evaluation (not just rejections) at info level — file/line/severity/category/confidence/accepted/defaulted/reasoning. Diagnostic for calibrating `RUSTY_JUDGE_THRESHOLD` |
 
 See [Judge / filter pass](/guides/judge-pass/).
 

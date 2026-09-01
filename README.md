@@ -277,6 +277,7 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 | `RUSTY_OLLAMA_API_KEY` | bearer token for the `ollama/*` provider (required for Ollama Cloud, ignored for unauthenticated local instances); falls back to `OLLAMA_API_KEY` | — |
 | `RUSTY_LOG_AGENT_STEPS` | when `true`, log a line per agent step (`stepNumber`, `finishReason`, `toolCallCount`, token usage); diagnostic for slow / tool-looping passes | `false` |
 | `RUSTY_LOG_RAW_FINDINGS` | when `true`, log each consensus pass's findings before clustering (file/line/severity/category/message); diagnostic for tuning Jaccard / line-proximity thresholds | `false` |
+| `RUSTY_LOG_JUDGE_SCORES` | when `true`, log every judge evaluation (not just rejections) at info level — file/line/severity/category/confidence/accepted/defaulted/reasoning; diagnostic for calibrating `RUSTY_JUDGE_THRESHOLD` | `false` |
 | `RUSTY_JIRA_BASE_URL` | Jira instance URL | — |
 | `RUSTY_JIRA_EMAIL` | Jira auth email | — |
 | `RUSTY_JIRA_API_TOKEN` | Jira API token | — |
@@ -608,7 +609,7 @@ If you keep seeing headers-timeout failures on a specific consensus pass, bump `
 
 ### Diagnostic Logging
 
-Two opt-in flags surface internal state for debugging slow consensus runs and tuning ensemble behavior. Both default off so production cost is zero.
+Three opt-in flags surface internal state for debugging slow consensus runs, tuning ensemble behavior, and calibrating the judge pass. All default off so production cost is zero.
 
 **`RUSTY_LOG_AGENT_STEPS=true`** — one log line per agent step inside every `runReview` call:
 
@@ -631,6 +632,21 @@ Useful when a pass takes minutes and you can't tell whether the model is making 
 Lets you tell whether the models are actually disagreeing (different findings → clustering's job is hard, threshold may be too strict) vs. saying the same thing in different words (overlap exists but Jaccard threshold may be missing it). Prerequisite for tuning `cluster.ts` — see `CONSENSUS-QUALITY-WRITEUP.md` for proposed experiments.
 
 The pino logger has to be at `debug` level for this one — set `LOG_LEVEL=debug` alongside the flag if you're not seeing the output.
+
+**`RUSTY_LOG_JUDGE_SCORES=true`** — emits one info-level record per judge pass with every finding's evaluation, not just the rejected ones:
+
+```jsonc
+{
+  "model": "anthropic/claude-3-5-haiku-20241022",
+  "threshold": 6,
+  "evaluations": [
+    { "file": "src/auth.ts", "line": 42, "severity": "critical", "category": "security", "confidence": 9, "accepted": true, "defaulted": false, "reasoning": "..." },
+    { "file": "src/utils.ts", "line": 10, "severity": "warning", "category": "style", "confidence": 3, "accepted": false, "defaulted": false, "reasoning": "..." }
+  ]
+}
+```
+
+Per-finding scores are otherwise thrown away — only rejections are logged (at `debug`), which makes `RUSTY_JUDGE_THRESHOLD` impossible to calibrate from data. This flag is the prerequisite for that calibration. `defaulted: true` marks findings the judge returned no evaluation for (kept via fail-open, not a real score) — exclude these from any threshold analysis. Unlike the other two flags, this one logs at `info` so it doesn't require `LOG_LEVEL=debug`.
 
 ### OpenGrep Pre-scan
 

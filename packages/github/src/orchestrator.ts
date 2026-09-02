@@ -123,6 +123,7 @@ export async function orchestrateReview(params: {
       focusAreas: repoConfig?.focusAreas ?? ALL_FOCUS_AREAS,
       ignorePatterns: repoConfig?.ignorePatterns ?? [],
       ...(conventionFile ? { conventionFile } : {}),
+      flagScopeCreep: process.env.RUSTY_FLAG_SCOPE_CREEP === "true",
     };
 
     const patches = parseDiff(rawDiff);

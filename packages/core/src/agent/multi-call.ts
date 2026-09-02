@@ -15,6 +15,7 @@ import type {
   TicketComplianceItem,
   TicketComplianceStatus,
   MissingTestItem,
+  ScopeCreepItem,
   DroppedFinding,
 } from "../types.js";
 import type { OpenGrepFinding } from "../opengrep/types.js";
@@ -207,6 +208,7 @@ export function mergeResults(results: ReviewResult[], modelUsed: string): Review
     .map((r) => r.recommendation);
 
   const recommendation = deriveMergedRecommendation(dedupedFindings, elevatedRecommendations);
+  const scopeCreep = mergeScopeCreep(results);
 
   return {
     summary,
@@ -218,6 +220,7 @@ export function mergeResults(results: ReviewResult[], modelUsed: string): Review
     filesReviewed: [...allFiles],
     modelUsed,
     tokenCount: totalTokens,
+    ...(scopeCreep.length > 0 && { scopeCreep }),
     ...(triageStats ? { triageStats } : {}),
     ...(consensusMetadata && { consensusMetadata }),
     ...(dedupedDropped.length > 0 && { droppedFindings: dedupedDropped }),
@@ -283,6 +286,25 @@ export function mergeMissingTests(results: ReviewResult[]): MissingTestItem[] {
   for (const result of results) {
     for (const item of result.missingTests) {
       const key = `${item.file.toLowerCase()}:${item.description.toLowerCase().trim()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(item);
+    }
+  }
+
+  return merged;
+}
+
+// one entry per file: chunks never share a file, and consensus passes describe
+// the same out-of-scope change in different words, so the path is the only
+// stable key. first occurrence wins (pass 0 / earlier chunk).
+export function mergeScopeCreep(results: ReviewResult[]): ScopeCreepItem[] {
+  const seen = new Set<string>();
+  const merged: ScopeCreepItem[] = [];
+
+  for (const result of results) {
+    for (const item of result.scopeCreep ?? []) {
+      const key = item.file.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
       merged.push(item);

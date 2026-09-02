@@ -16,6 +16,7 @@ Built on [Mastra](https://mastra.ai/) (TypeScript).
 - **OpenGrep pre-scan** — runs [OpenGrep](https://opengrep.dev/) SAST on changed files before LLM review, feeds findings for triage (gracefully skipped when not installed)
 - **Multi-provider LLM** — OpenAI, Anthropic, Google, or any provider supported by Mastra
 - **PR description generation** — optionally generate a structured PR description from the diff when the description is empty or a placeholder (off by default)
+- **Scope creep detection** — optionally list changes in the diff that fall outside the PR's stated intent (title, description, linked tickets) in a dedicated summary section (off by default; enable with `RUSTY_FLAG_SCOPE_CREEP=true`)
 - **Incremental review** — on subsequent pushes the bot reviews only the diff since the previously-reviewed state (commit on GitHub/GitLab, PR iteration on Azure DevOps) instead of the entire PR, cutting tokens on multi-commit PRs. The previous summary, recommendation, and surfaced findings are carried forward so the agent keeps PR-wide context without re-reading the full diff (on by default; opt out with `RUSTY_INCREMENTAL_REVIEW=false`)
 - **GitHub + GitLab + Azure DevOps + local CLI** — webhook server for GitHub, pipeline task for Azure DevOps, GitLab CI job, a drop-in GitHub Action, or a `rusty-bot` CLI that runs reviews against any local git repo
 - **Web dashboard** — configure repos, review styles, focus areas, and view history
@@ -306,6 +307,7 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 | `RUSTY_OPENGREP_RULES` | OpenGrep config string (ruleset or path to rule file) | `auto` |
 | `RUSTY_GENERATE_DESCRIPTION` | generate PR description when empty/placeholder | `false` |
 | `RUSTY_RENAME_TITLE_TO_CONVENTIONAL` | rewrite non-conventional PR titles into Conventional Commits format | `false` |
+| `RUSTY_FLAG_SCOPE_CREEP` | list changes that fall outside the PR's stated intent in a "Scope Creep" section of the summary comment | `false` |
 | `RUSTY_LLM_MAX_RETRIES` | application-level retries on transient LLM errors (max 2) | `2` |
 | `RUSTY_LLM_MAX_STEPS` | cap on multi-step tool-using trajectories per review pass. The final allowed step is forced to `toolChoice: "none"` so the model has to emit text (and therefore structured output), which avoids tool-happy models — Anthropic in particular — terminating with `finishReason: "tool-calls"` and zero text. Unset = mastra's default (no cap, no forced final step). | — |
 | `RUSTY_LLM_STRUCTURING_MODEL` | model id for a separate structuring pass (e.g. `azure-openai/gpt-5.4-mini`). When set, the review model writes freeform prose with tools available and no schema pressure, and a cheap structuring model translates the prose into the required JSON. Eliminates the entire class of "model terminates with tool-calls and zero text" failures since the review model is no longer on the schema-output path. Adds one cheap LLM call per review pass. | — |
@@ -796,6 +798,25 @@ Or per-repo in the dashboard (PR Description checkbox).
 5. The review then runs with the generated description visible in the PR metadata
 
 **Safety:** The bot never overwrites a human-written description. The detection is conservative — any description with meaningful prose, issue references, or structured content is left untouched. Bot-generated descriptions (identified by an HTML marker) can be regenerated on subsequent runs.
+
+### Scope Creep Detection
+
+When enabled, the deep-review tier is asked to compare every change in the diff against the PR's stated intent — its title, description, and any linked tickets — and list the changes that do not serve it: unrelated refactors or renames, drive-by fixes in code the change did not need to touch, features or options the intent never called for, unrelated dependency or CI bumps, and formatting sweeps in otherwise untouched files.
+
+Off by default. Enable via:
+
+```bash
+RUSTY_FLAG_SCOPE_CREEP=true
+```
+
+**How it works:**
+
+1. The review output schema gains a `scopeCreep` list (file + one-sentence description), and the system prompt gains the flag/do-not-flag rules
+2. Mechanical edits the main change requires (call-site updates, imports, tests for the new behavior) and anything the title or description explicitly mentions are not flagged; when the title and description give no usable intent the list stays empty
+3. Entries are merged across review chunks and consensus passes, one entry per file (first pass wins)
+4. The summary comment renders a visible **Scope Creep** section (not collapsed) below the issue details
+
+Scope creep is informational only: it is not posted as inline comments, does not count toward the severity totals, and does not affect the merge recommendation or `RUSTY_FAIL_ON_CRITICAL`. The skim tier of a cascading review never produces scope creep entries, so files triaged as "skim" are not checked. A PR description that actually describes the extra work is the cheapest way to keep a change off the list.
 
 ### Conventional Commit Title Rewriting
 

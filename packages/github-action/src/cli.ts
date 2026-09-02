@@ -145,6 +145,7 @@ export function parseConfig({ event, env = process.env }: ParseConfigOptions): A
   const generateDescription = env.RUSTY_GENERATE_DESCRIPTION === "true";
   const renameTitleToConventional = env.RUSTY_RENAME_TITLE_TO_CONVENTIONAL === "true";
   const incrementalReview = env.RUSTY_INCREMENTAL_REVIEW !== "false";
+  const flagScopeCreep = env.RUSTY_FLAG_SCOPE_CREEP === "true";
 
   const octokit = new Octokit({ auth: token });
 
@@ -158,6 +159,7 @@ export function parseConfig({ event, env = process.env }: ParseConfigOptions): A
       style: parsedStyle.data,
       focusAreas: focusAreas.length > 0 ? focusAreas : ALL_FOCUS_AREAS,
       ignorePatterns,
+      flagScopeCreep,
     },
     failOnCritical,
     generateDescription,

@@ -13,6 +13,7 @@ export interface CliArgs {
   ignorePatterns: string[];
   format: OutputFormat;
   failOnCritical: boolean;
+  flagScopeCreep: boolean;
   help: boolean;
 }
 
@@ -38,6 +39,7 @@ Flags accept --flag value or --flag=value form.
 Environment (overridden by flags when both are set):
   RUSTY_REVIEW_STYLE     default for --style
   RUSTY_FOCUS_AREAS      default for --focus
+  RUSTY_FLAG_SCOPE_CREEP set to "true" to list out-of-scope changes in the review
   RUSTY_IGNORE_PATTERNS  default for --ignore
   RUSTY_FAIL_ON_CRITICAL set to "true" to enable --fail-on-critical
   RUSTY_LLM_MODEL        e.g. anthropic/claude-sonnet-4-20250514
@@ -122,6 +124,10 @@ function applyEnvDefaults(args: CliArgs, env: NodeJS.ProcessEnv): void {
   if (env.RUSTY_FAIL_ON_CRITICAL === "true") {
     args.failOnCritical = true;
   }
+
+  if (env.RUSTY_FLAG_SCOPE_CREEP === "true") {
+    args.flagScopeCreep = true;
+  }
 }
 
 export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): CliArgs {
@@ -134,6 +140,7 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
     ignorePatterns: [],
     format: "markdown",
     failOnCritical: false,
+    flagScopeCreep: false,
     help: false,
   };
 

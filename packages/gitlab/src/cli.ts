@@ -124,6 +124,7 @@ export function parseConfig({ env = process.env }: ParseEnvOptions = {}): GitLab
       .filter(Boolean) ?? [];
   const failOnCritical = env.RUSTY_FAIL_ON_CRITICAL !== "false";
   const incrementalReview = env.RUSTY_INCREMENTAL_REVIEW !== "false";
+  const flagScopeCreep = env.RUSTY_FLAG_SCOPE_CREEP === "true";
 
   return {
     provider: new GitLabProvider({
@@ -137,6 +138,7 @@ export function parseConfig({ env = process.env }: ParseEnvOptions = {}): GitLab
       style: parsedStyle.data,
       focusAreas: focusAreas.length > 0 ? focusAreas : ALL_FOCUS_AREAS,
       ignorePatterns,
+      flagScopeCreep,
     },
     failOnCritical,
     incrementalReview,

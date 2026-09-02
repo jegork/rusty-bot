@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
-import { ReviewOutputSchema, SkimReviewOutputSchema } from "../agent/schema.js";
+import {
+  ReviewOutputSchema,
+  ScopeCreepReviewOutputSchema,
+  SkimReviewOutputSchema,
+} from "../agent/schema.js";
 import { TriageOutputSchema } from "../triage/schema.js";
 
 interface JsonSchemaObject {
@@ -79,5 +83,19 @@ describe("TriageOutputSchema strict mode compatibility", () => {
     const jsonSchema = z.toJSONSchema(TriageOutputSchema) as JsonSchemaObject;
     const violations = collectStrictViolations(jsonSchema);
     expect(violations, violations.join("\n")).toEqual([]);
+  });
+});
+
+describe("ScopeCreepReviewOutputSchema strict mode compatibility", () => {
+  it("has all properties listed in required, including scopeCreep", () => {
+    const jsonSchema = z.toJSONSchema(ScopeCreepReviewOutputSchema) as JsonSchemaObject;
+    const violations = collectStrictViolations(jsonSchema);
+    expect(violations, violations.join("\n")).toEqual([]);
+    expect(jsonSchema.required).toContain("scopeCreep");
+  });
+
+  it("does not leak scopeCreep into the base schema", () => {
+    const jsonSchema = z.toJSONSchema(ReviewOutputSchema) as JsonSchemaObject;
+    expect(jsonSchema.required).not.toContain("scopeCreep");
   });
 });

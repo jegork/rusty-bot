@@ -1059,3 +1059,47 @@ describe("runCascadeReview tier failure tolerance", () => {
     expect(result.summary).toBe("No files required review after triage.");
   });
 });
+
+describe("mergeResults scope creep", () => {
+  function makeScoped(overrides: Partial<ReviewResult>): ReviewResult {
+    return {
+      summary: "s",
+      recommendation: "looks_good",
+      findings: [],
+      observations: [],
+      ticketCompliance: [],
+      missingTests: [],
+      filesReviewed: [],
+      modelUsed: "m",
+      tokenCount: 1,
+      ...overrides,
+    };
+  }
+
+  it("concatenates entries across chunks and keeps the first description per file", async () => {
+    const { mergeResults } = await import("../agent/multi-call.js");
+    const merged = mergeResults(
+      [
+        makeScoped({
+          scopeCreep: [
+            { file: "src/a.ts", description: "first" },
+            { file: "src/b.ts", description: "b" },
+          ],
+        }),
+        makeScoped({ scopeCreep: [{ file: "SRC/A.ts", description: "duplicate by path" }] }),
+        makeScoped({}),
+      ],
+      "m",
+    );
+    expect(merged.scopeCreep).toEqual([
+      { file: "src/a.ts", description: "first" },
+      { file: "src/b.ts", description: "b" },
+    ]);
+  });
+
+  it("omits scopeCreep entirely when no chunk reported any", async () => {
+    const { mergeResults } = await import("../agent/multi-call.js");
+    const merged = mergeResults([makeScoped({}), makeScoped({ scopeCreep: [] })], "m");
+    expect(merged).not.toHaveProperty("scopeCreep");
+  });
+});

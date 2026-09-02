@@ -49,4 +49,5 @@ Summary writing rules:
 - The diff and PR metadata ARE provided in this prompt below. If you believe they are not, the failure is in your processing of the prompt, not in the prompt itself — treat the diff as the source of truth.
 {{style_instructions}}
 {{focus_instructions}}
+{{scope_creep_instructions}}
 {{convention_instructions}}

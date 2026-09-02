@@ -902,3 +902,55 @@ describe("runReview empty provider response", () => {
     expect(generateMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("runReview scope creep", () => {
+  beforeEach(() => {
+    generateMock.mockReset();
+  });
+
+  it("requests scopeCreep in the schema and returns it when the flag is on", async () => {
+    generateMock.mockResolvedValueOnce({
+      object: {
+        ...makeValidResponse().object,
+        scopeCreep: [{ file: "a.ts", description: "unrelated rename" }],
+      },
+      usage: { totalTokens: 100 },
+    });
+
+    const result = await runReview({ ...config, flagScopeCreep: true }, "diff", prMetadata);
+
+    const schema = generateMock.mock.calls[0][1].structuredOutput.schema;
+    expect(schema.shape).toHaveProperty("scopeCreep");
+    expect(result.scopeCreep).toEqual([{ file: "a.ts", description: "unrelated rename" }]);
+  });
+
+  it("keeps the base schema and leaves scopeCreep undefined when the flag is off", async () => {
+    generateMock.mockResolvedValueOnce(makeValidResponse());
+
+    const result = await runReview(config, "diff", prMetadata);
+
+    const schema = generateMock.mock.calls[0][1].structuredOutput.schema;
+    expect(schema.shape).not.toHaveProperty("scopeCreep");
+    expect(result.scopeCreep).toBeUndefined();
+  });
+
+  it("never requests scopeCreep on the skim tier", async () => {
+    generateMock.mockResolvedValueOnce({
+      object: {
+        summary: "looks fine",
+        recommendation: "looks_good",
+        findings: [],
+        observations: [],
+        filesReviewed: ["a.ts"],
+      },
+      usage: { totalTokens: 100 },
+    });
+
+    await runReview({ ...config, flagScopeCreep: true }, "diff", prMetadata, undefined, {
+      tier: "skim",
+    });
+
+    const schema = generateMock.mock.calls[0][1].structuredOutput.schema;
+    expect(schema.shape).not.toHaveProperty("scopeCreep");
+  });
+});

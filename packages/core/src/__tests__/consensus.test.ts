@@ -681,3 +681,34 @@ describe("RUSTY_LOG_RAW_FINDINGS", () => {
     debugSpy.mockRestore();
   });
 });
+
+describe("runConsensusReview scope creep", () => {
+  it("merges scopeCreep across passes, one entry per file", async () => {
+    const { runReview } = await import("../agent/review.js");
+    (runReview as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(
+        makeResult({ scopeCreep: [{ file: "src/a.ts", description: "pass 0 wording" }] }),
+      )
+      .mockResolvedValueOnce(
+        makeResult({
+          scopeCreep: [
+            { file: "src/a.ts", description: "pass 1 wording" },
+            { file: "src/b.ts", description: "only pass 1 saw this" },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(makeResult({}));
+
+    const result = await runConsensusReview(
+      [],
+      { ...config, consensusPasses: 3, flagScopeCreep: true },
+      prMetadata,
+      "diff content",
+    );
+
+    expect(result.scopeCreep).toEqual([
+      { file: "src/a.ts", description: "pass 0 wording" },
+      { file: "src/b.ts", description: "only pass 1 saw this" },
+    ]);
+  });
+});

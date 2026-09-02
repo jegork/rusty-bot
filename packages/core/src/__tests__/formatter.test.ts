@@ -1067,3 +1067,44 @@ describe("formatSummaryComment with triage stats", () => {
     expect(triageIdx).toBeLessThan(overviewIdx);
   });
 });
+
+describe("formatSummaryComment scope creep", () => {
+  it("renders a visible section with one row per out-of-scope change", () => {
+    const review = makeReview({
+      scopeCreep: [
+        { file: "src/utils.ts", description: "renames helpers unrelated to the login fix" },
+        { file: "package.json", description: "bumps eslint | prettier with no related change" },
+      ],
+    });
+
+    const result = formatSummaryComment(review);
+
+    expect(result).toContain("## Scope Creep (2 out-of-scope changes)");
+    expect(result).toContain("| `src/utils.ts` | renames helpers unrelated to the login fix |");
+    expect(result).toContain("bumps eslint \\| prettier with no related change");
+    expect(result).not.toContain("<summary>Scope Creep");
+  });
+
+  it("uses the singular label for a single entry", () => {
+    const review = makeReview({
+      scopeCreep: [{ file: "src/utils.ts", description: "unrelated rename" }],
+    });
+    expect(formatSummaryComment(review)).toContain("## Scope Creep (1 out-of-scope change)");
+  });
+
+  it("omits the section when scopeCreep is absent or empty", () => {
+    expect(formatSummaryComment(makeReview())).not.toContain("Scope Creep");
+    expect(formatSummaryComment(makeReview({ scopeCreep: [] }))).not.toContain("Scope Creep");
+  });
+
+  it("places scope creep after issue details and before the collapsible detail sections", () => {
+    const review = makeReview({
+      findings: [makeFinding()],
+      scopeCreep: [{ file: "src/utils.ts", description: "unrelated rename" }],
+      missingTests: [{ file: "src/a.ts", description: "edge case: empty input" }],
+    });
+    const result = formatSummaryComment(review);
+    expect(result.indexOf("Issue Details")).toBeLessThan(result.indexOf("Scope Creep"));
+    expect(result.indexOf("Scope Creep")).toBeLessThan(result.indexOf("Missing Tests"));
+  });
+});

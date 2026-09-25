@@ -561,126 +561,94 @@ describe("runReview retry on transient LLM errors", () => {
 });
 
 describe("RUSTY_LLM_MAX_STEPS", () => {
+  const FORCED = { toolChoice: "none", activeTools: [] };
+
   beforeEach(() => {
     generateMock.mockReset();
     delete process.env.RUSTY_LLM_MAX_STEPS;
   });
 
-  it("does not pass maxSteps or prepareStep to agent.generate when env is unset", async () => {
+  async function captureGenerateOpts() {
+    generateMock.mockReset();
     generateMock.mockResolvedValueOnce(makeValidResponse());
-
     await runReview(config, "diff", prMetadata);
+    return generateMock.mock.calls[0][1] as Record<string, unknown>;
+  }
 
-    const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
-    expect(opts.maxSteps).toBeUndefined();
-    expect(opts.prepareStep).toBeUndefined();
-  });
-
-  it("passes the configured maxSteps and a prepareStep hook to agent.generate", async () => {
-    process.env.RUSTY_LLM_MAX_STEPS = "5";
-    generateMock.mockResolvedValueOnce(makeValidResponse());
-
-    await runReview(config, "diff", prMetadata);
-
-    const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
-    expect(opts.maxSteps).toBe(5);
+  // probes well past the cap so a hook that fires late (or never) is caught too
+  function forcedSteps(opts: Record<string, unknown>): number[] {
     expect(opts.prepareStep).toBeTypeOf("function");
-  });
-
-  it("prepareStep returns nothing for non-final steps", async () => {
-    process.env.RUSTY_LLM_MAX_STEPS = "5";
-    generateMock.mockResolvedValueOnce(makeValidResponse());
-
-    await runReview(config, "diff", prMetadata);
-
-    const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
     const prepareStep = opts.prepareStep as (a: { stepNumber: number }) => unknown;
-    for (const stepNumber of [0, 1, 2, 3]) {
-      expect(prepareStep({ stepNumber })).toBeUndefined();
+    const forced: number[] = [];
+    for (let stepNumber = 0; stepNumber < 40; stepNumber++) {
+      const result = prepareStep({ stepNumber });
+      if (result === undefined) continue;
+      expect(result, `step ${stepNumber}`).toEqual(FORCED);
+      forced.push(stepNumber);
     }
+    return forced;
+  }
+
+  const range = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => from + i);
+
+  it("defaults to 20 steps with only the last one (step 19) forced tool-free when env is unset", async () => {
+    const opts = await captureGenerateOpts();
+
+    // without an explicit maxSteps mastra silently stops at 5 steps with no forced answer
+    expect(opts.maxSteps).toBe(20);
+    expect(forcedSteps(opts)).toEqual(range(19, 40));
   });
 
-  it("prepareStep strips tools and forces toolChoice='none' on the final allowed step", async () => {
+  it("forces step 4 (and only from there on) when set to 5", async () => {
     process.env.RUSTY_LLM_MAX_STEPS = "5";
-    generateMock.mockResolvedValueOnce(makeValidResponse());
+    const opts = await captureGenerateOpts();
 
-    await runReview(config, "diff", prMetadata);
+    expect(opts.maxSteps).toBe(5);
+    expect(forcedSteps(opts)).toEqual(range(4, 40));
+  });
 
-    const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
-    const prepareStep = opts.prepareStep as (a: { stepNumber: number }) => unknown;
-    expect(prepareStep({ stepNumber: 4 })).toEqual({ toolChoice: "none", activeTools: [] });
-    expect(prepareStep({ stepNumber: 99 })).toEqual({ toolChoice: "none", activeTools: [] });
+  it("an explicit value above the default wins over it", async () => {
+    process.env.RUSTY_LLM_MAX_STEPS = "30";
+    const opts = await captureGenerateOpts();
+
+    expect(opts.maxSteps).toBe(30);
+    expect(forcedSteps(opts)).toEqual(range(29, 40));
   });
 
   it("prepareStep does NOT override the system prompt — the anti-meta-narrative rules live in base.txt so they apply at every step (not just the forced-termination one)", async () => {
     process.env.RUSTY_LLM_MAX_STEPS = "5";
-    generateMock.mockResolvedValueOnce(makeValidResponse());
+    const opts = await captureGenerateOpts();
 
-    await runReview(config, "diff", prMetadata);
-
-    const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
     const prepareStep = opts.prepareStep as (a: { stepNumber: number }) => unknown;
-
-    expect(prepareStep({ stepNumber: 0 })).toBeUndefined();
     expect(prepareStep({ stepNumber: 4 })).not.toHaveProperty("system");
   });
 
-  it("prepareStep with maxSteps=1 forces tool-free mode on step 0 (the only step)", async () => {
+  it("with maxSteps=1 the first step is already forced tool-free", async () => {
     process.env.RUSTY_LLM_MAX_STEPS = "1";
-    generateMock.mockResolvedValueOnce(makeValidResponse());
+    const opts = await captureGenerateOpts();
 
-    await runReview(config, "diff", prMetadata);
-
-    const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
-    const prepareStep = opts.prepareStep as (a: { stepNumber: number }) => unknown;
-    expect(prepareStep({ stepNumber: 0 })).toEqual({ toolChoice: "none", activeTools: [] });
+    expect(opts.maxSteps).toBe(1);
+    expect(forcedSteps(opts)).toEqual(range(0, 40));
   });
 
   it("floors fractional values", async () => {
     process.env.RUSTY_LLM_MAX_STEPS = "3.7";
-    generateMock.mockResolvedValueOnce(makeValidResponse());
+    const opts = await captureGenerateOpts();
 
-    await runReview(config, "diff", prMetadata);
-
-    const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
     expect(opts.maxSteps).toBe(3);
+    expect(forcedSteps(opts)).toEqual(range(2, 40));
   });
 
-  it("ignores non-numeric values and falls back to mastra default", async () => {
-    process.env.RUSTY_LLM_MAX_STEPS = "abc";
-    generateMock.mockResolvedValueOnce(makeValidResponse());
-
-    await runReview(config, "diff", prMetadata);
-
-    const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
-    expect(opts.maxSteps).toBeUndefined();
-    expect(opts.prepareStep).toBeUndefined();
-  });
-
-  it("ignores zero and negative values (caps below 1 are nonsensical)", async () => {
-    for (const raw of ["0", "-1", "-100"]) {
+  it.each(["", "0", "-3", "-100", "abc", "0.5", "Infinity", "NaN"])(
+    "falls back to the default of 20 for invalid value %j",
+    async (raw) => {
       process.env.RUSTY_LLM_MAX_STEPS = raw;
-      generateMock.mockReset();
-      generateMock.mockResolvedValueOnce(makeValidResponse());
+      const opts = await captureGenerateOpts();
 
-      await runReview(config, "diff", prMetadata);
-
-      const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
-      expect(opts.maxSteps, `for raw="${raw}"`).toBeUndefined();
-      expect(opts.prepareStep, `for raw="${raw}"`).toBeUndefined();
-    }
-  });
-
-  it("ignores empty string", async () => {
-    process.env.RUSTY_LLM_MAX_STEPS = "";
-    generateMock.mockResolvedValueOnce(makeValidResponse());
-
-    await runReview(config, "diff", prMetadata);
-
-    const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
-    expect(opts.maxSteps).toBeUndefined();
-    expect(opts.prepareStep).toBeUndefined();
-  });
+      expect(opts.maxSteps).toBe(20);
+      expect(forcedSteps(opts)).toEqual(range(19, 40));
+    },
+  );
 });
 
 describe("RUSTY_LLM_STRUCTURING_MODEL", () => {

@@ -119,16 +119,19 @@ function readMaxTransientRetries(): number {
   return Math.min(Math.floor(n), TRANSIENT_RETRY_BACKOFF_MS.length);
 }
 
-// caps how many tool-use rounds an agent can run before mastra forces it to
-// produce a final answer. unset = mastra's default. matters most for Anthropic
-// models, which can otherwise fan out parallel tool calls indefinitely and
-// terminate with finishReason="tool-calls" and zero text — defeating the
-// structured-output contract.
-function readLlmMaxSteps(): number | undefined {
+const DEFAULT_LLM_MAX_STEPS = 20;
+
+// caps how many tool-use rounds an agent can run before it is forced to
+// produce a final answer. unset/invalid = 20. there is always a cap: without
+// an explicit maxSteps mastra stops after 5 steps with no forced final answer,
+// so a model that makes one tool call per step ends mid-investigation with
+// finishReason="tool-calls" and zero text — defeating the structured-output
+// contract.
+function readLlmMaxSteps(): number {
   const raw = process.env.RUSTY_LLM_MAX_STEPS;
-  if (raw === undefined || raw === "") return undefined;
+  if (raw === undefined || raw === "") return DEFAULT_LLM_MAX_STEPS;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n < 1) return undefined;
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_LLM_MAX_STEPS;
   return Math.floor(n);
 }
 
@@ -444,23 +447,19 @@ export async function runReview(
   const jsonPromptInjection = resolveJsonPromptInjection(structuringConfig ?? modelConfig);
   const structuringModel = structuringConfig ? resolveModel(structuringConfig) : undefined;
   const maxSteps = readLlmMaxSteps();
-  // when capping steps we ALSO have to force the final step to be tool-free,
-  // otherwise tool-happy models (Anthropic in particular) burn the whole budget
-  // on tool calls and end with finishReason="tool-calls" and no text — which
+  // the final allowed step has to be tool-free, otherwise tool-happy models
+  // (Anthropic in particular) burn the whole budget on tool calls and end with finishReason="tool-calls" and no text — which
   // produces no structured output and the pass fails. stripping tools on the
   // last allowed step guarantees the model emits a final answer. the anti-meta-
   // narrative rules that prevent "investigation is in progress" / "no input was
   // provided" summaries live in the base system prompt (see prompts/base.txt)
   // so they apply at every step, not just the forced-termination one — the
   // failure mode also fires when the model stops voluntarily.
-  const prepareStep =
-    maxSteps !== undefined
-      ? ({ stepNumber }: { stepNumber: number }) => {
-          if (stepNumber >= maxSteps - 1) {
-            return { toolChoice: "none" as const, activeTools: [] };
-          }
-        }
-      : undefined;
+  const prepareStep = ({ stepNumber }: { stepNumber: number }) => {
+    if (stepNumber >= maxSteps - 1) {
+      return { toolChoice: "none" as const, activeTools: [] };
+    }
+  };
   const logBindings = {
     model: modelName,
     tier,
@@ -477,8 +476,8 @@ export async function runReview(
             ...(structuringModel && { model: structuringModel }),
           },
           ...(Object.keys(modelSettings).length > 0 && { modelSettings }),
-          ...(maxSteps !== undefined && { maxSteps }),
-          ...(prepareStep && { prepareStep }),
+          maxSteps,
+          prepareStep,
           ...(onStepFinish && { onStepFinish }),
         });
         // mastra's prompt-injected JSON path can silently return object:undefined

@@ -12,6 +12,8 @@ import {
   supportsNativeStructuredOutput,
   applyModelConstraints,
   mutateBodyForFoundry,
+  parseModelEffort,
+  resolveModel,
 } from "../agent/model.js";
 
 function clearEnv() {
@@ -45,6 +47,7 @@ function clearEnv() {
   delete process.env.RUSTY_OLLAMA_BASE_URL;
   delete process.env.RUSTY_OLLAMA_API_KEY;
   delete process.env.OLLAMA_API_KEY;
+  delete process.env.OPENROUTER_API_KEY;
 }
 
 describe("resolveModelConfig", () => {
@@ -1245,5 +1248,237 @@ describe("resolveModelConfigWithOverride", () => {
     }
 
     expect(process.env.RUSTY_LLM_MODEL).toBe("anthropic/claude-sonnet");
+  });
+});
+
+describe("parseModelEffort", () => {
+  it("strips a trailing effort suffix", () => {
+    expect(parseModelEffort("openrouter/openai/gpt-6-luna:xhigh")).toEqual({
+      model: "openrouter/openai/gpt-6-luna",
+      reasoningEffort: "xhigh",
+    });
+  });
+
+  it.each(["max", "xhigh", "high", "medium", "low", "minimal", "none"])(
+    "accepts %s as an effort",
+    (effort) => {
+      expect(parseModelEffort(`openrouter/x/y:${effort}`)).toEqual({
+        model: "openrouter/x/y",
+        reasoningEffort: effort,
+      });
+    },
+  );
+
+  it.each([
+    "openrouter/x/y:batch",
+    "openrouter/x/y:free",
+    "openrouter/x/y:nitro",
+    "openrouter/x/y:floor",
+    "openrouter/x/y:online",
+    "openrouter/x/y:exacto",
+    "ollama/qwen3:32b",
+    "ollama/foo:latest",
+    "openrouter/x/y:ultra",
+    "openrouter/x/y:HIGH",
+    "anthropic/claude-sonnet-4-6",
+  ])("leaves %s untouched", (model) => {
+    expect(parseModelEffort(model)).toEqual({ model });
+  });
+
+  it("keeps an openrouter variant and strips only the trailing effort", () => {
+    expect(parseModelEffort("openrouter/x/y:batch:high")).toEqual({
+      model: "openrouter/x/y:batch",
+      reasoningEffort: "high",
+    });
+  });
+
+  it("only strips the last segment when an effort-looking segment is not last", () => {
+    expect(parseModelEffort("openrouter/x/y:high:batch")).toEqual({
+      model: "openrouter/x/y:high:batch",
+    });
+  });
+
+  it("does not treat a bare effort word without a model as a suffix", () => {
+    expect(parseModelEffort("high")).toEqual({ model: "high" });
+    expect(parseModelEffort(":high")).toEqual({ model: ":high" });
+  });
+});
+
+describe("model:effort suffix", () => {
+  beforeEach(clearEnv);
+
+  it("resolves an openrouter model to the base id plus the effort", () => {
+    process.env.RUSTY_LLM_MODEL = "openrouter/openai/gpt-6-luna:xhigh";
+    expect(resolveModelConfig()).toEqual({
+      type: "router",
+      model: "openrouter/openai/gpt-6-luna",
+      reasoningEffort: "xhigh",
+    });
+  });
+
+  it("never hands the suffixed id to the model router", () => {
+    process.env.RUSTY_LLM_MODEL = "openrouter/openai/gpt-6-luna:xhigh";
+    expect(resolveModel(resolveModelConfig())).toBe("openrouter/openai/gpt-6-luna");
+  });
+
+  it("passes openrouter variants through with no effort", () => {
+    process.env.RUSTY_LLM_MODEL = "openrouter/x/y:batch";
+    const config = resolveModelConfig();
+    expect(config).toEqual({ type: "router", model: "openrouter/x/y:batch" });
+    expect(resolveDefaultAgentOptions(config)).toBeUndefined();
+  });
+
+  it("keeps the variant and applies the effort for variant:effort", () => {
+    process.env.RUSTY_LLM_MODEL = "openrouter/x/y:batch:high";
+    expect(resolveModelConfig()).toEqual({
+      type: "router",
+      model: "openrouter/x/y:batch",
+      reasoningEffort: "high",
+    });
+  });
+
+  it("treats an unknown suffix as part of the model id", () => {
+    process.env.RUSTY_LLM_MODEL = "openrouter/x/y:ultra";
+    expect(resolveModelConfig()).toEqual({ type: "router", model: "openrouter/x/y:ultra" });
+  });
+
+  it.each(["ollama/qwen3:32b", "ollama/foo:latest"])("leaves ollama tag %s untouched", (m) => {
+    process.env.RUSTY_LLM_MODEL = m;
+    const config = resolveModelConfig();
+    expect(config.type).toBe("ollama");
+    expect(getModelDisplayName(config)).toBe(m);
+  });
+
+  it.each([
+    "anthropic/claude-sonnet-4-6:high",
+    "requesty/openai/gpt-5:high",
+    "ollama/qwen3:32b:high",
+  ])("throws a config error for a non-openrouter model with an effort (%s)", (m) => {
+    process.env.RUSTY_LLM_MODEL = m;
+    expect(() => resolveModelConfig()).toThrow(/only supported for openrouter\//);
+    expect(() => resolveModelConfig()).toThrow(m);
+  });
+
+  it("throws for azure prefixes with an effort", () => {
+    process.env.AZURE_OPENAI_RESOURCE_NAME = "r";
+    process.env.AZURE_API_KEY = "k";
+    expect(() => resolveModelConfigWithOverride("azure-openai/gpt-5.4-mini:high")).toThrow(
+      /only supported for openrouter\//,
+    );
+    expect(() => resolveModelConfigWithOverride("azure-foundry/Kimi-K2.6:low")).toThrow(
+      /only supported for openrouter\//,
+    );
+  });
+
+  it("throws when an openrouter model is routed to an openai-compatible endpoint", () => {
+    process.env.RUSTY_LLM_BASE_URL = "https://litellm.example.com/v1";
+    process.env.RUSTY_LLM_MODEL = "openrouter/x/y:high";
+    expect(() => resolveModelConfig()).toThrow(/only supported for openrouter\//);
+  });
+
+  it("applies to RUSTY_LLM_TRIAGE_MODEL", () => {
+    process.env.RUSTY_LLM_TRIAGE_MODEL = "openrouter/google/gemini-3-flash:low";
+    expect(resolveTriageModelConfig()).toEqual({
+      type: "router",
+      model: "openrouter/google/gemini-3-flash",
+      reasoningEffort: "low",
+    });
+  });
+
+  it("applies to RUSTY_REVIEW_MODELS entries independently", () => {
+    process.env.RUSTY_LLM_MODEL = "openrouter/default/model:medium";
+    process.env.RUSTY_REVIEW_MODELS =
+      "openrouter/openai/gpt-6-luna:xhigh,openrouter/x/y:batch,anthropic/claude-sonnet-4-6";
+
+    const configs = resolveReviewPassModelConfigs(4);
+
+    expect(configs.map((c) => c.config)).toEqual([
+      { type: "router", model: "openrouter/openai/gpt-6-luna", reasoningEffort: "xhigh" },
+      { type: "router", model: "openrouter/x/y:batch" },
+      { type: "router", model: "anthropic/claude-sonnet-4-6" },
+      { type: "router", model: "openrouter/default/model", reasoningEffort: "medium" },
+    ]);
+    expect(configs.map((c) => c.displayName)).toEqual([
+      "openrouter/openai/gpt-6-luna:xhigh",
+      "openrouter/x/y:batch",
+      "anthropic/claude-sonnet-4-6",
+      "openrouter/default/model:medium",
+    ]);
+  });
+
+  it("throws when any RUSTY_REVIEW_MODELS entry carries an effort on an unsupported provider", () => {
+    process.env.RUSTY_REVIEW_MODELS = "openrouter/x/y:high,anthropic/claude-sonnet-4-6:high";
+    expect(() => resolveReviewPassModelConfigs(2)).toThrow("anthropic/claude-sonnet-4-6:high");
+  });
+
+  it("sends the effort as providerOptions.openrouter.reasoning.effort", () => {
+    expect(
+      resolveDefaultAgentOptions({
+        type: "router",
+        model: "openrouter/openai/gpt-6-luna",
+        reasoningEffort: "xhigh",
+      }),
+    ).toEqual({ providerOptions: { openrouter: { reasoning: { effort: "xhigh" } } } });
+  });
+
+  it("still sends the effort when prompt caching is disabled", () => {
+    process.env.RUSTY_PROMPT_CACHE = "false";
+    expect(
+      resolveDefaultAgentOptions({
+        type: "router",
+        model: "openrouter/x/y",
+        reasoningEffort: "low",
+      }),
+    ).toEqual({ providerOptions: { openrouter: { reasoning: { effort: "low" } } } });
+  });
+
+  it("merges the effort with requesty auto_cache options", () => {
+    expect(
+      resolveDefaultAgentOptions({
+        type: "router",
+        model: "requesty/openrouter/x",
+        reasoningEffort: "high",
+      }),
+    ).toEqual({
+      providerOptions: {
+        requesty: { auto_cache: true },
+        openrouter: { reasoning: { effort: "high" } },
+      },
+    });
+  });
+
+  it("includes the effort in the display name", () => {
+    expect(
+      getModelDisplayName({
+        type: "router",
+        model: "openrouter/openai/gpt-6-luna",
+        reasoningEffort: "xhigh",
+      }),
+    ).toBe("openrouter/openai/gpt-6-luna:xhigh");
+  });
+
+  it("applies the temperature lock to a suffixed model", () => {
+    process.env.RUSTY_LLM_MODEL = "openrouter/moonshot/kimi-k2.5:high";
+    const settings = applyModelConstraints(resolveModelConfig(), { temperature: 0.2 });
+    expect(settings.temperature).toBe(1);
+  });
+
+  it("matches exact model patterns against the base id, not the suffixed one", () => {
+    process.env.RUSTY_LLM_MODEL = "openrouter/openai/gpt-6-luna:xhigh";
+    process.env.RUSTY_LLM_JSON_PROMPT_INJECTION = "openrouter/openai/gpt-6-luna";
+    expect(resolveJsonPromptInjection(resolveModelConfig())).toBe(true);
+
+    delete process.env.RUSTY_LLM_JSON_PROMPT_INJECTION;
+    process.env.RUSTY_LLM_NATIVE_STRUCTURED_OUTPUT = "openrouter/openai/gpt-6-luna";
+    expect(resolveJsonPromptInjection(resolveModelConfig())).toBe(false);
+  });
+
+  it("disable-thinking still matches a foundry deployment whose name contains a colon", () => {
+    process.env.AZURE_OPENAI_RESOURCE_NAME = "r";
+    process.env.AZURE_API_KEY = "k";
+    process.env.RUSTY_LLM_DISABLE_THINKING = "azure-foundry/Kimi-K2.6:v2";
+    expect(
+      resolveDisableThinking(resolveModelConfigWithOverride("azure-foundry/Kimi-K2.6:v2")),
+    ).toBe(true);
   });
 });

@@ -7,6 +7,7 @@ import {
   resolveModelSettings,
   resolveJsonPromptInjection,
   applyModelConstraints,
+  resolveDefaultAgentOptions,
 } from "../agent/model.js";
 import { ConventionalTitleOutputSchema, type ConventionalTitleOutput } from "./schema.js";
 import { buildTitleSystemPrompt, buildTitleUserMessage } from "./prompt.js";
@@ -31,11 +32,13 @@ export async function generateConventionalTitle(
   const modelConfig = resolveModelConfig();
   const modelName = getModelDisplayName(modelConfig);
 
+  const defaultOptions = resolveDefaultAgentOptions(modelConfig);
   const agent = new Agent({
     id: "title-agent",
     name: "Rusty Bot Title Generator",
     instructions: () => buildTitleSystemPrompt(),
     model: () => resolveModel(modelConfig),
+    ...(defaultOptions && { defaultOptions }),
   });
 
   const userMessage = buildTitleUserMessage(compressed, prMetadata);

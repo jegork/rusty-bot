@@ -256,7 +256,7 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `RUSTY_LLM_MODEL` | LLM model in `provider/model` format | `anthropic/claude-sonnet-4-20250514` |
+| `RUSTY_LLM_MODEL` | LLM model in `provider/model` format. `openrouter/*` models accept an optional `:<effort>` suffix, see [Reasoning effort](#reasoning-effort-openrouter) | `anthropic/claude-sonnet-4-20250514` |
 | `OPENAI_API_KEY` | OpenAI API key | — |
 | `ANTHROPIC_API_KEY` | Anthropic API key | — |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Google AI API key | — |
@@ -440,6 +440,20 @@ Caveats:
 - **Native structured output is off by default for OpenRouter.** `supportsNativeStructuredOutput` doesn't include `openrouter/` in its allow-list because OpenRouter's proxying of `response_format: json_schema` varies by underlying model. Route through the structuring model (`RUSTY_LLM_STRUCTURING_MODEL`) instead, or opt in per-pattern with `RUSTY_LLM_NATIVE_STRUCTURED_OUTPUT=openrouter/anthropic/*` if you've verified the upstream honors it.
 - **OpenRouter's load balancer picks an inference backend per request**, so the same `openrouter/deepseek/deepseek-v4-pro` request can land on Fireworks, DeepSeek's own API, Together, etc. — bringing the same provider-routing-matters lesson with it. Pin a specific backend with the `:nitro` suffix (fastest available) or the OpenRouter-native `provider` parameter if you need determinism.
 - **No bot-level prompt-cache integration**, the way `requesty/*` gets `auto_cache: true`. OpenRouter has its own caching for some models — handled upstream, no env var to flip on the bot side.
+
+#### Reasoning effort (OpenRouter)
+
+Without an explicit effort, every model runs at its provider default (GPT-6 Luna, for example, defaults to `medium`). Append `:<effort>` to any `openrouter/*` model string to send `reasoning: { effort }` with each request. This works in `RUSTY_LLM_MODEL`, in each `RUSTY_REVIEW_MODELS` entry, and in `RUSTY_JUDGE_MODEL` and `RUSTY_LLM_TRIAGE_MODEL`:
+
+```bash
+RUSTY_REVIEW_MODELS=openrouter/openai/gpt-6-luna:xhigh,openrouter/moonshotai/kimi-k2.6,openrouter/deepseek/deepseek-v4-pro:batch:high
+RUSTY_LLM_TRIAGE_MODEL=openrouter/google/gemini-3-flash:low
+```
+
+- Accepted values match OpenRouter's [`reasoning.effort`](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens): `max`, `xhigh`, `high`, `medium`, `low`, `minimal`, `none`. Each model supports only some of these, so check the model's `supported_efforts` on OpenRouter.
+- Only the **last** `:segment` is read, and only when it is one of those values. OpenRouter variants (`:batch`, `:free`, `:nitro`, `:online`, ...) and Ollama tags (`ollama/qwen3:32b`) stay part of the model id. To combine a variant with an effort, put the effort last: `openrouter/x/y:batch:high`.
+- **OpenRouter only.** An effort suffix on any other provider (`anthropic/...:high`, `azure-openai/...:high`, `ollama/...:high`, or an `openrouter/*` model sent to `RUSTY_LLM_BASE_URL`) fails with a config error. It is not silently ignored.
+- The effort appears in the model name shown in review comments and logs (e.g. `openrouter/openai/gpt-6-luna:xhigh`). Pattern matching for `RUSTY_LLM_JSON_PROMPT_INJECTION` / `RUSTY_LLM_NATIVE_STRUCTURED_OUTPUT` uses the id without the suffix.
 
 ### Model Inference Settings
 

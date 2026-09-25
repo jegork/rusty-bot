@@ -45,11 +45,12 @@ The managed identity vars (`RUSTY_AZURE_*`) take priority over the API-key vars 
 | `RUSTY_LLM_BASE_URL` | Base URL of an OpenAI-compatible endpoint (LiteLLM, vLLM, Ollama, …) |
 | `RUSTY_LLM_API_KEY` | API key for the custom endpoint (optional for unauthenticated local instances) |
 
-## Retries
+## Retries and step limits
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `RUSTY_LLM_MAX_RETRIES` | `2` | Max additional retries after a transient LLM error. Capped at the length of the built-in backoff schedule (2 entries today — values higher than that are silently lowered). Set to `0` to disable retries entirely. |
+| `RUSTY_LLM_MAX_STEPS` | `20` | Max tool-using steps per review pass. The last allowed step is always forced to `toolChoice: "none"`, so the model has to emit its final answer instead of ending on a tool call with no text. Empty or invalid values (non-numeric, below `1`) fall back to `20`. Mastra's own default would otherwise stop after 5 steps with no forced final answer, which leaves slower-investigating models (one tool call per step) with no structured output. |
 
 ## Temperature and top-p
 

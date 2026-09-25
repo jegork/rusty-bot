@@ -8,6 +8,30 @@ import { LocalGitProvider } from "../local-provider.js";
 
 const execFileAsync = promisify(execFile);
 
+// git hooks export GIT_DIR / GIT_INDEX_FILE etc. when the suite runs from
+// pre-commit. left in place, every git call below (and in the provider) would
+// target the repo being committed instead of the temp repo — `git init` there
+// flips core.bare=true on the real checkout. list from `git rev-parse --local-env-vars`.
+for (const key of [
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_CONFIG",
+  "GIT_CONFIG_PARAMETERS",
+  "GIT_CONFIG_COUNT",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_IMPLICIT_WORK_TREE",
+  "GIT_GRAFT_FILE",
+  "GIT_INDEX_FILE",
+  "GIT_NO_REPLACE_OBJECTS",
+  "GIT_REPLACE_REF_BASE",
+  "GIT_PREFIX",
+  "GIT_SHALLOW_FILE",
+  "GIT_COMMON_DIR",
+]) {
+  Reflect.deleteProperty(process.env, key);
+}
+
 interface GitRepo {
   path: string;
   initialSha: string;

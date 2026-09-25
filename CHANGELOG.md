@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.17.0](https://github.com/jegork/rusty-bot/compare/v1.16.1...v1.17.0) (2026-09-25)
+
+
+### Features
+
+* **models:** accept model:effort suffix for reasoning effort ([#204](https://github.com/jegork/rusty-bot/issues/204)) ([cf9b4a5](https://github.com/jegork/rusty-bot/commit/cf9b4a5de17a539afc6ab29f5419c603a5f52899))
+* **review:** promote skim files to the deep tier when skim fails ([0db6409](https://github.com/jegork/rusty-bot/commit/0db6409048eb5a3c3e289f734d3fafc2896f8054))
+
+
+### Bug Fixes
+
+* **build:** clear dist/prompts before copying so template edits take effect ([539597e](https://github.com/jegork/rusty-bot/commit/539597e23d53462a866cf15f6e8f356839165d1d))
+* **prompts:** make the system prompt tier-aware ([b663838](https://github.com/jegork/rusty-bot/commit/b6638381bb4732b62bfb65928eeba1c7a094cce0))
+* **review:** fail fast on empty completions, degrade tier failures ([e9c5c1f](https://github.com/jegork/rusty-bot/commit/e9c5c1f4c3a6f1f52121cb1988b20b5e93f79050))
+
 ## [1.16.1](https://github.com/jegork/rusty-bot/compare/v1.16.0...v1.16.1) (2026-05-21)
 
 

@@ -51,9 +51,9 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 Other supported providers: `openai/gpt-4o`, `google/gemini-2.5-flash`, `openrouter/...`, and many more. Set the matching API key (`OPENAI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, etc.) for whichever model you choose.
 
-## Reasoning effort (OpenRouter)
+## Reasoning effort
 
-Without an explicit effort, every model runs at its provider default. Append `:<effort>` to an `openrouter/*` model string to send `reasoning: { effort }` with each request. The suffix works in every model setting: `RUSTY_LLM_MODEL`, each entry in `RUSTY_REVIEW_MODELS`, `RUSTY_JUDGE_MODEL` and `RUSTY_LLM_TRIAGE_MODEL`.
+Without an explicit effort, every model runs at its provider default. Append `:<effort>` to an `openrouter/*` or `azure-openai/*` model string to send the effort with each request. The suffix works in every model setting: `RUSTY_LLM_MODEL`, each entry in `RUSTY_REVIEW_MODELS`, `RUSTY_JUDGE_MODEL` and `RUSTY_LLM_TRIAGE_MODEL`.
 
 ```bash
 OPENROUTER_API_KEY=sk-or-v1-...
@@ -63,8 +63,9 @@ RUSTY_JUDGE_MODEL=openrouter/openai/gpt-6-luna:medium
 
 - **Accepted values** are the ones OpenRouter's [`reasoning.effort`](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens) accepts: `max`, `xhigh`, `high`, `medium`, `low`, `minimal`, `none`. Each model supports only some of them, so check the model's `supported_efforts` on OpenRouter.
 - **Only the last `:segment` is read**, and only when it is one of those values. OpenRouter variants (`:batch`, `:free`, `:nitro`, `:online`, ...) and Ollama tags (`ollama/qwen3:32b`) stay part of the model id. To combine a variant with an effort, put the effort last: `openrouter/x/y:batch:high`.
-- **OpenRouter only.** An effort suffix on any other provider (`anthropic/...:high`, `azure-openai/...:high`, `ollama/...:high`, or an `openrouter/*` model sent to `RUSTY_LLM_BASE_URL`) fails with a config error. It is not silently ignored.
-- The effort appears in the model name shown in review comments and logs, e.g. `openrouter/openai/gpt-6-luna:xhigh`.
+- **Azure OpenAI.** `azure-openai/<deployment>:<effort>` sends `reasoningEffort` to the Responses API, forced on even when the deployment name doesn't look like a reasoning model (e.g. `azure-openai/review-model:high`). Needs `AZURE_OPENAI_RESOURCE_NAME`, like any `azure-openai/*` model.
+- **OpenRouter and Azure OpenAI only.** An effort suffix on any other provider (`anthropic/...:high`, `azure-foundry/...:high`, `ollama/...:high`, or an `openrouter/*` model sent to `RUSTY_LLM_BASE_URL`) fails with a config error. It is not silently ignored.
+- The effort appears in the model name shown in review comments and logs, e.g. `openrouter/openai/gpt-6-luna:xhigh` or `azure/gpt-6-luna:xhigh`.
 
 ## Temperature and top-p
 

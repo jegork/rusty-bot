@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.1](https://github.com/jegork/rusty-bot/compare/v1.17.0...v1.17.1) (2026-09-25)
+
+
+### Bug Fixes
+
+* **review:** force a final answer step when RUSTY_LLM_MAX_STEPS is unset ([#205](https://github.com/jegork/rusty-bot/issues/205)) ([7e72daf](https://github.com/jegork/rusty-bot/commit/7e72dafcbd4d12dcccbc5b03bb5091e8c6ed0ece))
+
 ## [1.17.0](https://github.com/jegork/rusty-bot/compare/v1.16.1...v1.17.0) (2026-09-25)
 
 

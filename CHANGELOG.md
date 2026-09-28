@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.0](https://github.com/jegork/rusty-bot/compare/v1.17.1...v1.18.0) (2026-09-28)
+
+
+### Features
+
+* **models:** accept :effort suffix for azure-openai models ([#207](https://github.com/jegork/rusty-bot/issues/207)) ([26ad310](https://github.com/jegork/rusty-bot/commit/26ad310dc7a31f968122355e073fbd802b7331b3))
+
 ## [1.17.1](https://github.com/jegork/rusty-bot/compare/v1.17.0...v1.17.1) (2026-09-25)
 
 

@@ -4,7 +4,8 @@ import { DefaultAzureCredential } from "@azure/identity";
 import { createOllama } from "ai-sdk-ollama";
 
 // the values openrouter's reasoning.effort accepts
-// (https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)
+// (https://openrouter.ai/docs/guides/best-practices/reasoning-tokens);
+// @ai-sdk/azure's responses reasoningEffort accepts the same set
 export const REASONING_EFFORTS = [
   "max",
   "xhigh",
@@ -18,8 +19,19 @@ export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 export type ModelConfig =
   | { type: "router"; model: string; reasoningEffort?: ReasoningEffort }
-  | { type: "azure-api-key"; resourceName: string; deploymentName: string; apiKey: string }
-  | { type: "azure-managed-identity"; resourceName: string; deploymentName: string }
+  | {
+      type: "azure-api-key";
+      resourceName: string;
+      deploymentName: string;
+      apiKey: string;
+      reasoningEffort?: ReasoningEffort;
+    }
+  | {
+      type: "azure-managed-identity";
+      resourceName: string;
+      deploymentName: string;
+      reasoningEffort?: ReasoningEffort;
+    }
   | { type: "azure-foundry-api-key"; resourceName: string; deploymentName: string; apiKey: string }
   | { type: "azure-foundry-managed-identity"; resourceName: string; deploymentName: string }
   | { type: "azure-anthropic-api-key"; baseUrl: string; deploymentName: string; apiKey: string }
@@ -48,12 +60,30 @@ export function resolveModelConfig(): ModelConfig {
   const { model, reasoningEffort } = parseModelEffort(raw);
   const config = resolveBaseModelConfig(model);
   if (!reasoningEffort) return config;
-  if (config.type !== "router" || !config.model.startsWith("openrouter/")) {
+  if (!supportsReasoningEffort(model, config)) {
     throw new Error(
-      `model "${raw}" sets reasoning effort ":${reasoningEffort}", but the effort suffix is only supported for openrouter/ models (this one resolved to ${config.type} "${getModelDisplayName(config)}"). remove the suffix or use an openrouter/ model.`,
+      `model "${raw}" sets reasoning effort ":${reasoningEffort}", but the effort suffix is only supported for openrouter/ and azure-openai/ models (this one resolved to ${config.type} "${getModelDisplayName(config)}"). remove the suffix or use an openrouter/ or azure-openai/ model.`,
     );
   }
   return { ...config, reasoningEffort };
+}
+
+type EffortCapableModelConfig = Extract<
+  ModelConfig,
+  { type: "router" | "azure-api-key" | "azure-managed-identity" }
+>;
+
+function supportsReasoningEffort(
+  model: string,
+  config: ModelConfig,
+): config is EffortCapableModelConfig {
+  if (config.type === "router") return config.model.startsWith("openrouter/");
+  // the legacy RUSTY_AZURE_DEPLOYMENT override resolves to the same types for
+  // any model string, so require the prefix the effort was written against
+  if (config.type === "azure-api-key" || config.type === "azure-managed-identity") {
+    return model.startsWith("azure-openai/");
+  }
+  return false;
 }
 
 function resolveBaseModelConfig(model: string): ModelConfig {
@@ -376,9 +406,21 @@ export function resolveDefaultAgentOptions(config: ModelConfig):
       providerOptions: {
         requesty?: { auto_cache: true };
         openrouter?: { reasoning: { effort: ReasoningEffort } };
+        azure?: { reasoningEffort: ReasoningEffort; forceReasoning: true };
       };
     }
   | undefined {
+  if (config.type === "azure-api-key" || config.type === "azure-managed-identity") {
+    if (!config.reasoningEffort) return undefined;
+    // the sdk infers reasoning support from the model id, which on azure is a
+    // free-form deployment name; unforced, it drops the effort for names like
+    // "review-model" with only a warning
+    return {
+      providerOptions: {
+        azure: { reasoningEffort: config.reasoningEffort, forceReasoning: true as const },
+      },
+    };
+  }
   if (config.type !== "router") return undefined;
   const autoCache =
     process.env.RUSTY_PROMPT_CACHE !== "false" && config.model.startsWith("requesty/");
@@ -613,9 +655,10 @@ export function getModelDisplayName(config: ModelConfig): string {
     case "router":
       return config.reasoningEffort ? `${config.model}:${config.reasoningEffort}` : config.model;
     case "azure-api-key":
-      return `azure/${config.deploymentName}`;
     case "azure-managed-identity":
-      return `azure/${config.deploymentName}`;
+      return config.reasoningEffort
+        ? `azure/${config.deploymentName}:${config.reasoningEffort}`
+        : `azure/${config.deploymentName}`;
     case "azure-foundry-api-key":
       return `azure-foundry/${config.deploymentName}`;
     case "azure-foundry-managed-identity":

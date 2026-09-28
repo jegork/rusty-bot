@@ -1359,15 +1359,85 @@ describe("model:effort suffix", () => {
     expect(() => resolveModelConfig()).toThrow(m);
   });
 
-  it("throws for azure prefixes with an effort", () => {
+  it("resolves an azure-openai model with an api key to the bare deployment plus the effort", () => {
     process.env.AZURE_OPENAI_RESOURCE_NAME = "r";
     process.env.AZURE_API_KEY = "k";
-    expect(() => resolveModelConfigWithOverride("azure-openai/gpt-5.4-mini:high")).toThrow(
-      /only supported for openrouter\//,
-    );
+    expect(resolveModelConfigWithOverride("azure-openai/gpt-6-luna:xhigh")).toEqual({
+      type: "azure-api-key",
+      resourceName: "r",
+      deploymentName: "gpt-6-luna",
+      apiKey: "k",
+      reasoningEffort: "xhigh",
+    });
+  });
+
+  it("resolves an azure-openai model on managed identity to the bare deployment plus the effort", () => {
+    process.env.AZURE_OPENAI_RESOURCE_NAME = "r";
+    expect(resolveModelConfigWithOverride("azure-openai/gpt-6-luna:none")).toEqual({
+      type: "azure-managed-identity",
+      resourceName: "r",
+      deploymentName: "gpt-6-luna",
+      reasoningEffort: "none",
+    });
+  });
+
+  it("throws for azure-foundry models with an effort", () => {
+    process.env.AZURE_OPENAI_RESOURCE_NAME = "r";
+    process.env.AZURE_API_KEY = "k";
     expect(() => resolveModelConfigWithOverride("azure-foundry/Kimi-K2.6:low")).toThrow(
-      /only supported for openrouter\//,
+      /only supported for openrouter\/ and azure-openai\//,
     );
+  });
+
+  it("throws for an azure-openai model when no azure resource is configured", () => {
+    // without AZURE_OPENAI_RESOURCE_NAME the id falls through to the model router,
+    // which cannot apply an azure effort
+    expect(() => resolveModelConfigWithOverride("azure-openai/gpt-6-luna:high")).toThrow(
+      /only supported for openrouter\/ and azure-openai\//,
+    );
+  });
+
+  it("resolves the azure review pass list used by the ado pipeline", () => {
+    process.env.AZURE_OPENAI_RESOURCE_NAME = "r";
+    process.env.RUSTY_REVIEW_MODELS =
+      "azure-openai/gpt-6-luna:xhigh,azure-foundry/DeepSeek-V4.1-Flash,azure-foundry/muse-spark-1.3";
+
+    expect(resolveReviewPassModelConfigs(3).map((c) => c.displayName)).toEqual([
+      "azure/gpt-6-luna:xhigh",
+      "azure-foundry/DeepSeek-V4.1-Flash",
+      "azure-foundry/muse-spark-1.3",
+    ]);
+  });
+
+  it("sends the azure effort as providerOptions.azure and forces reasoning mode", () => {
+    expect(
+      resolveDefaultAgentOptions({
+        type: "azure-api-key",
+        resourceName: "r",
+        deploymentName: "review-model",
+        apiKey: "k",
+        reasoningEffort: "high",
+      }),
+    ).toEqual({ providerOptions: { azure: { reasoningEffort: "high", forceReasoning: true } } });
+    expect(
+      resolveDefaultAgentOptions({
+        type: "azure-managed-identity",
+        resourceName: "r",
+        deploymentName: "review-model",
+        reasoningEffort: "low",
+      }),
+    ).toEqual({ providerOptions: { azure: { reasoningEffort: "low", forceReasoning: true } } });
+  });
+
+  it("sends no provider options for an azure-openai model without an effort", () => {
+    expect(
+      resolveDefaultAgentOptions({
+        type: "azure-api-key",
+        resourceName: "r",
+        deploymentName: "gpt-6-luna",
+        apiKey: "k",
+      }),
+    ).toBeUndefined();
   });
 
   it("throws when an openrouter model is routed to an openai-compatible endpoint", () => {

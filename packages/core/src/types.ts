@@ -8,6 +8,7 @@ export type {
   Observation,
   TicketComplianceItem,
   MissingTestItem,
+  ScopeCreepItem,
   ReviewOutput,
 } from "./agent/schema.js";
 
@@ -19,6 +20,7 @@ import type {
   Recommendation,
   Severity,
   ReviewOutput,
+  ScopeCreepItem,
 } from "./agent/schema.js";
 
 export interface DroppedFinding {
@@ -105,6 +107,8 @@ export interface ReviewResult extends ReviewOutput {
   consensusMetadata?: ConsensusMetadata;
   droppedFindings?: DroppedFinding[];
   openGrepStats?: OpenGrepStats;
+  /** out-of-scope changes; only populated when `ReviewConfig.flagScopeCreep` is on */
+  scopeCreep?: ScopeCreepItem[];
 }
 
 export interface ReviewConfig {
@@ -115,6 +119,8 @@ export interface ReviewConfig {
   consensusPasses?: number;
   consensusThreshold?: number | null;
   generateDescription?: boolean;
+  /** ask the deep-review tier to list changes that fall outside the PR's stated intent */
+  flagScopeCreep?: boolean;
 }
 
 export interface PRMetadata {

@@ -13,7 +13,7 @@ import { compressDiff } from "../diff/compress.js";
 import { shufflePatches } from "../diff/shuffle.js";
 import { clusterFindings, clusterObservations } from "./cluster.js";
 import { runReview, type RunReviewOptions } from "./review.js";
-import { mergeMissingTests } from "./multi-call.js";
+import { mergeMissingTests, mergeScopeCreep } from "./multi-call.js";
 import { resolveReviewPassModelConfigs } from "./model.js";
 import { logger } from "../logger.js";
 
@@ -311,6 +311,7 @@ export async function runConsensusReview(
     "consensus voting complete",
   );
 
+  const scopeCreep = mergeScopeCreep(results);
   const summaries = results.map((r) => r.summary).filter(Boolean);
   const summary =
     summaries.length <= 1
@@ -327,6 +328,7 @@ export async function runConsensusReview(
     filesReviewed: [...allFiles],
     modelUsed: results[0]?.modelUsed ?? "unknown",
     tokenCount: totalTokens,
+    ...(scopeCreep.length > 0 && { scopeCreep }),
     consensusMetadata: {
       passes,
       threshold,

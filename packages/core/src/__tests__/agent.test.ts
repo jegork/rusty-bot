@@ -693,3 +693,22 @@ describe("buildSystemPrompt tier awareness", () => {
     expect(buildSystemPrompt(baseConfig, "skim")).toContain("`suggestedFix`");
   });
 });
+
+describe("buildSystemPrompt scope creep", () => {
+  it("omits scope creep instructions by default", () => {
+    const prompt = buildSystemPrompt(baseConfig);
+    expect(prompt).not.toContain("scopeCreep");
+  });
+
+  it("includes the output requirement and the flag/do-not-flag rules when enabled", () => {
+    const prompt = buildSystemPrompt({ ...baseConfig, flagScopeCreep: true });
+    expect(prompt).toContain("A scopeCreep list");
+    expect(prompt).toContain("unrelated refactors");
+    expect(prompt).toContain("mechanical edits the main change requires");
+  });
+
+  it("omits scope creep instructions for the skim tier even when enabled", () => {
+    const prompt = buildSystemPrompt({ ...baseConfig, flagScopeCreep: true }, "skim");
+    expect(prompt).not.toContain("scopeCreep");
+  });
+});

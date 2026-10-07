@@ -1,0 +1,13 @@
+Scope creep review is enabled. Establish the PR's stated intent from its title, description, and any linked tickets, then flag changes in the diff that do not serve that intent:
+- unrelated refactors, renames, or file moves
+- drive-by bug fixes or behavior changes in code the stated change did not need to touch
+- new features, options, or configuration the stated intent did not call for
+- dependency upgrades, tooling, or CI changes unrelated to the stated work
+- formatting or style sweeps in files the change did not otherwise need
+
+Do NOT flag:
+- mechanical edits the main change requires (call-site updates, imports, type changes, tests for the new behavior)
+- changes the PR title or description explicitly mentions, even if they look tangential
+- anything when the title and description give no usable intent — leave the list empty rather than guess
+
+Report each out-of-scope change as a `scopeCreep` entry with the file path (copied exactly from the diff) and a one-sentence description of what it changes and why it falls outside the stated intent. Scope creep is informational: do not also report it as a finding, and do not let it affect the merge recommendation.

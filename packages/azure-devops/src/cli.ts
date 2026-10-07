@@ -74,6 +74,7 @@ export function parseConfig(): {
   const ignorePatterns = process.env.RUSTY_IGNORE_PATTERNS?.split(",").filter(Boolean) ?? [];
   const failOnCritical = process.env.RUSTY_FAIL_ON_CRITICAL !== "false";
   const incrementalReview = process.env.RUSTY_INCREMENTAL_REVIEW !== "false";
+  const flagScopeCreep = process.env.RUSTY_FLAG_SCOPE_CREEP === "true";
 
   return {
     provider: new AzureDevOpsProvider({
@@ -87,6 +88,7 @@ export function parseConfig(): {
       style: parsedStyle.data,
       focusAreas,
       ignorePatterns,
+      flagScopeCreep,
     },
     failOnCritical,
     incrementalReview,

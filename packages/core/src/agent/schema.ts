@@ -115,6 +115,17 @@ export const MissingTestSchema = z.object({
 
 export type MissingTestItem = z.infer<typeof MissingTestSchema>;
 
+export const ScopeCreepSchema = z.object({
+  file: z.string().describe("changed file containing the out-of-scope change"),
+  description: z
+    .string()
+    .describe(
+      "one sentence naming what the change does and why it falls outside the PR's stated intent",
+    ),
+});
+
+export type ScopeCreepItem = z.infer<typeof ScopeCreepSchema>;
+
 export const ReviewOutputSchema = z.object({
   summary: z.string().describe("concise summary of the PR and overall assessment"),
   recommendation: RecommendationSchema.describe("merge recommendation based on findings"),
@@ -138,6 +149,16 @@ export const ReviewOutputSchema = z.object({
 });
 
 export type ReviewOutput = z.infer<typeof ReviewOutputSchema>;
+
+// only used when RUSTY_FLAG_SCOPE_CREEP is on so the base schema stays
+// identical for everyone else
+export const ScopeCreepReviewOutputSchema = ReviewOutputSchema.extend({
+  scopeCreep: z
+    .array(ScopeCreepSchema)
+    .describe(
+      "changes in the diff that do not serve the PR's stated intent; empty when every change is in scope or the intent cannot be established",
+    ),
+});
 
 export const SkimReviewOutputSchema = z.object({
   summary: z.string().describe("concise summary of the PR and overall assessment"),

@@ -52,6 +52,7 @@ export async function run(args: CliArgs): Promise<number> {
     style: args.style,
     focusAreas: args.focusAreas,
     ignorePatterns: args.ignorePatterns,
+    flagScopeCreep: args.flagScopeCreep,
   };
 
   const metadata = await provider.getPRMetadata();

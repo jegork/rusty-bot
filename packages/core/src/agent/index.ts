@@ -8,7 +8,9 @@ export {
   ObservationSchema,
   TicketComplianceSchema,
   MissingTestSchema,
+  ScopeCreepSchema,
   ReviewOutputSchema,
+  ScopeCreepReviewOutputSchema,
   SkimReviewOutputSchema,
 } from "./schema.js";
 export { buildSystemPrompt, buildUserMessage } from "./prompts.js";
@@ -19,6 +21,7 @@ export {
   runCascadeReview,
   mergeResults,
   mergeMissingTests,
+  mergeScopeCreep,
   filterObservationsForPrFiles,
   filterOpenGrepForFiles,
 } from "./multi-call.js";

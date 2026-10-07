@@ -8,6 +8,7 @@ import type {
   OpenGrepStats,
   TicketComplianceStatus,
   TicketResolutionStatus,
+  ScopeCreepItem,
 } from "../types.js";
 
 const SEVERITY_ORDER: Severity[] = ["critical", "warning", "suggestion"];
@@ -133,6 +134,22 @@ function buildElevatedConcernsSection(
   return lines.join("\n");
 }
 
+// deliberately not collapsed: the flag exists to make out-of-scope changes visible
+function buildScopeCreepSection(items: ScopeCreepItem[]): string {
+  const lines: string[] = [];
+  lines.push(
+    `## Scope Creep (${items.length} out-of-scope change${items.length === 1 ? "" : "s"})`,
+  );
+  lines.push("");
+  lines.push("| File | Change |");
+  lines.push("|------|--------|");
+  for (const item of items) {
+    lines.push(`| \`${item.file}\` | ${sanitizeTableCell(item.description)} |`);
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
 function buildTicketFetchMessage(status: TicketResolutionStatus): string {
   if (status.totalRefsFound === 0) {
     return "No linked ticket references detected.";
@@ -242,6 +259,10 @@ export function formatSummaryComment(
 
   lines.push("</details>");
   lines.push("");
+
+  if (review.scopeCreep && review.scopeCreep.length > 0) {
+    lines.push(buildScopeCreepSection(review.scopeCreep));
+  }
 
   if (
     !isElevatedWithoutSurvivors &&

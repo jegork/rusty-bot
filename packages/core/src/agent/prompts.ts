@@ -59,6 +59,9 @@ const TIER_PROMPT_SECTIONS = {
   },
 } as const;
 
+const SCOPE_CREEP_OUTPUT_REQUIREMENT =
+  "- A scopeCreep list of changes that do not serve the PR's stated intent (see the scope creep rules below). Leave the array empty when every change is in scope.";
+
 export function buildSystemPrompt(config: ReviewConfig, tier: ReviewTier = "deep-review"): string {
   const base = loadTemplate("base.txt");
   const styleInstructions = buildStyleInstructions(config.style);
@@ -67,15 +70,22 @@ export function buildSystemPrompt(config: ReviewConfig, tier: ReviewTier = "deep
     ? `\n\nAdditional instructions from the repository maintainer:\n${config.conventionFile}`
     : "";
   const tierSections = TIER_PROMPT_SECTIONS[tier];
+  // the skim tier's reduced schema has no scopeCreep field, so it must not be asked for one
+  const scopeCreep = config.flagScopeCreep === true && tier === "deep-review";
+  const extendedOutputRequirements = scopeCreep
+    ? `${tierSections.extended_output_requirements}\n${SCOPE_CREEP_OUTPUT_REQUIREMENT}`
+    : tierSections.extended_output_requirements;
+  const scopeCreepInstructions = scopeCreep ? `\n${loadTemplate("scope-creep.txt")}` : "";
 
   return base
     .replace("{{tool_instructions}}", tierSections.tool_instructions)
-    .replace("{{extended_output_requirements}}", tierSections.extended_output_requirements)
+    .replace("{{extended_output_requirements}}", extendedOutputRequirements)
     .replace("{{unverified_reference_qualifier}}", tierSections.unverified_reference_qualifier)
     .replace("{{speculation_rule}}", tierSections.speculation_rule)
     .replace("{{other_files_tool_note}}", tierSections.other_files_tool_note)
     .replace("{{style_instructions}}", styleInstructions)
     .replace("{{focus_instructions}}", focusInstructions)
+    .replace("{{scope_creep_instructions}}", scopeCreepInstructions)
     .replace("{{convention_instructions}}", conventionInstructions);
 }
 

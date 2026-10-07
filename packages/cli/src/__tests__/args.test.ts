@@ -122,3 +122,17 @@ describe("parseArgs", () => {
     });
   });
 });
+
+describe("parseArgs scope creep flag", () => {
+  it("is off by default", () => {
+    expect(parseArgs([], EMPTY_ENV).flagScopeCreep).toBe(false);
+  });
+
+  it("reads RUSTY_FLAG_SCOPE_CREEP=true from the environment", () => {
+    expect(parseArgs([], { RUSTY_FLAG_SCOPE_CREEP: "true" }).flagScopeCreep).toBe(true);
+  });
+
+  it("ignores values other than the literal true", () => {
+    expect(parseArgs([], { RUSTY_FLAG_SCOPE_CREEP: "1" }).flagScopeCreep).toBe(false);
+  });
+});

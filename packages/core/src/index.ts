@@ -31,6 +31,7 @@ export type {
   TicketProvider,
   DroppedFinding,
   ConsensusMetadata,
+  ScopeCreepItem,
 } from "./types.js";
 
 export { getMastra, getStorage } from "./mastra.js";

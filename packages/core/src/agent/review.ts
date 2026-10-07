@@ -2,7 +2,11 @@ import { Agent } from "@mastra/core/agent";
 import type { ToolsInput } from "@mastra/core/agent";
 import { generateText, Output } from "ai";
 import type { z } from "zod";
-import { ReviewOutputSchema, SkimReviewOutputSchema } from "./schema.js";
+import {
+  ReviewOutputSchema,
+  ScopeCreepReviewOutputSchema,
+  SkimReviewOutputSchema,
+} from "./schema.js";
 import { buildSystemPrompt, buildUserMessage, buildCachedSystemMessages } from "./prompts.js";
 import {
   resolveModelConfig,
@@ -429,7 +433,12 @@ export async function runReview(
     ...(defaultOptions && { defaultOptions }),
   });
 
-  const schema = tier === "skim" ? SkimReviewOutputSchema : ReviewOutputSchema;
+  const schema =
+    tier === "skim"
+      ? SkimReviewOutputSchema
+      : config.flagScopeCreep === true
+        ? ScopeCreepReviewOutputSchema
+        : ReviewOutputSchema;
 
   const rawModelSettings = options?.modelSettings ?? resolveModelSettings("review");
   const modelSettings = applyModelConstraints(modelConfig, rawModelSettings);
@@ -609,5 +618,8 @@ export async function runReview(
     filesReviewed: parsed.filesReviewed,
     modelUsed: modelName,
     tokenCount: totalTokens,
+    ...("scopeCreep" in parsed && {
+      scopeCreep: (parsed as Record<string, unknown>).scopeCreep as ReviewResult["scopeCreep"],
+    }),
   };
 }

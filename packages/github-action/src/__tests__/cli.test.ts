@@ -442,3 +442,28 @@ describe("runAction cascade triage wiring", () => {
     );
   });
 });
+
+describe("parseConfig scope creep flag", () => {
+  it("is off by default", () => {
+    const config = parseConfig({ event: BASE_EVENT, env: makeEnv() });
+    expect(config.review.flagScopeCreep).toBe(false);
+  });
+
+  it("turns on with RUSTY_FLAG_SCOPE_CREEP=true", () => {
+    const config = parseConfig({
+      event: BASE_EVENT,
+      env: makeEnv({ RUSTY_FLAG_SCOPE_CREEP: "true" }),
+    });
+    expect(config.review.flagScopeCreep).toBe(true);
+  });
+
+  it("treats any value other than the literal true as off", () => {
+    for (const value of ["1", "yes", "TRUE", ""]) {
+      const config = parseConfig({
+        event: BASE_EVENT,
+        env: makeEnv({ RUSTY_FLAG_SCOPE_CREEP: value }),
+      });
+      expect(config.review.flagScopeCreep, `value=${JSON.stringify(value)}`).toBe(false);
+    }
+  });
+});

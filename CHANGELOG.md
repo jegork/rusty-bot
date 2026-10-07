@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.1](https://github.com/jegork/rusty-bot/compare/v1.18.0...v1.18.1) (2026-10-07)
+
+
+### Documentation
+
+* document RUSTY_FLAG_SCOPE_CREEP in .env.example ([05e638c](https://github.com/jegork/rusty-bot/commit/05e638c9c2b87eb45494d9dc33da41b74512e7a0))
+
 ## [1.18.0](https://github.com/jegork/rusty-bot/compare/v1.17.1...v1.18.0) (2026-09-28)
 
 

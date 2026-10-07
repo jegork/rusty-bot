@@ -257,7 +257,7 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `RUSTY_LLM_MODEL` | LLM model in `provider/model` format | `anthropic/claude-sonnet-4-20250514` |
+| `RUSTY_LLM_MODEL` | LLM model in `provider/model` format. `openrouter/*` and `azure-openai/*` models accept an optional `:<effort>` suffix, see [Reasoning effort](#reasoning-effort) | `anthropic/claude-sonnet-4-20250514` |
 | `OPENAI_API_KEY` | OpenAI API key | — |
 | `ANTHROPIC_API_KEY` | Anthropic API key | — |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Google AI API key | — |
@@ -309,7 +309,7 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 | `RUSTY_RENAME_TITLE_TO_CONVENTIONAL` | rewrite non-conventional PR titles into Conventional Commits format | `false` |
 | `RUSTY_FLAG_SCOPE_CREEP` | list changes that fall outside the PR's stated intent in a "Scope Creep" section of the summary comment | `false` |
 | `RUSTY_LLM_MAX_RETRIES` | application-level retries on transient LLM errors (max 2) | `2` |
-| `RUSTY_LLM_MAX_STEPS` | cap on multi-step tool-using trajectories per review pass. The final allowed step is forced to `toolChoice: "none"` so the model has to emit text (and therefore structured output), which avoids tool-happy models — Anthropic in particular — terminating with `finishReason: "tool-calls"` and zero text. Unset = mastra's default (no cap, no forced final step). | — |
+| `RUSTY_LLM_MAX_STEPS` | cap on multi-step tool-using trajectories per review pass. The final allowed step is forced to `toolChoice: "none"` so the model has to emit text (and therefore structured output), which avoids tool-happy models — Anthropic in particular — terminating with `finishReason: "tool-calls"` and zero text. Unset, empty or invalid = 20. There is always a cap: without one, mastra stops after 5 steps with no forced final answer, so a model that makes one tool call per step ends mid-investigation with no JSON. | `20` |
 | `RUSTY_LLM_STRUCTURING_MODEL` | model id for a separate structuring pass (e.g. `azure-openai/gpt-5.4-mini`). When set, the review model writes freeform prose with tools available and no schema pressure, and a cheap structuring model translates the prose into the required JSON. Eliminates the entire class of "model terminates with tool-calls and zero text" failures since the review model is no longer on the schema-output path. Adds one cheap LLM call per review pass. | — |
 | `RUSTY_LLM_JSON_PROMPT_INJECTION` | comma-separated model IDs (or `prefix*` wildcards) to force-on prompt-injected JSON output, overriding the auto-detected default | — |
 | `RUSTY_LLM_NATIVE_STRUCTURED_OUTPUT` | comma-separated model IDs (or `prefix*` wildcards) to force-on native `json_schema` structured output, overriding the auto-detected default | — |
@@ -443,6 +443,21 @@ Caveats:
 - **Native structured output is off by default for OpenRouter.** `supportsNativeStructuredOutput` doesn't include `openrouter/` in its allow-list because OpenRouter's proxying of `response_format: json_schema` varies by underlying model. Route through the structuring model (`RUSTY_LLM_STRUCTURING_MODEL`) instead, or opt in per-pattern with `RUSTY_LLM_NATIVE_STRUCTURED_OUTPUT=openrouter/anthropic/*` if you've verified the upstream honors it.
 - **OpenRouter's load balancer picks an inference backend per request**, so the same `openrouter/deepseek/deepseek-v4-pro` request can land on Fireworks, DeepSeek's own API, Together, etc. — bringing the same provider-routing-matters lesson with it. Pin a specific backend with the `:nitro` suffix (fastest available) or the OpenRouter-native `provider` parameter if you need determinism.
 - **No bot-level prompt-cache integration**, the way `requesty/*` gets `auto_cache: true`. OpenRouter has its own caching for some models — handled upstream, no env var to flip on the bot side.
+
+#### Reasoning effort
+
+Without an explicit effort, every model runs at its provider default (GPT-6 Luna, for example, defaults to `medium`). Append `:<effort>` to any `openrouter/*` or `azure-openai/*` model string to send the effort with each request. This works in `RUSTY_LLM_MODEL`, in each `RUSTY_REVIEW_MODELS` entry, and in `RUSTY_JUDGE_MODEL` and `RUSTY_LLM_TRIAGE_MODEL`:
+
+```bash
+RUSTY_REVIEW_MODELS=openrouter/openai/gpt-6-luna:xhigh,openrouter/moonshotai/kimi-k2.6,openrouter/deepseek/deepseek-v4-pro:batch:high
+RUSTY_LLM_TRIAGE_MODEL=openrouter/google/gemini-3-flash:low
+```
+
+- Accepted values match OpenRouter's [`reasoning.effort`](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens): `max`, `xhigh`, `high`, `medium`, `low`, `minimal`, `none`. Each model supports only some of these, so check the model's `supported_efforts` on OpenRouter.
+- Only the **last** `:segment` is read, and only when it is one of those values. OpenRouter variants (`:batch`, `:free`, `:nitro`, `:online`, ...) and Ollama tags (`ollama/qwen3:32b`) stay part of the model id. To combine a variant with an effort, put the effort last: `openrouter/x/y:batch:high`.
+- **Azure OpenAI.** `azure-openai/<deployment>:<effort>` sends `reasoningEffort` to the Responses API, forced on even when the deployment name doesn't look like a reasoning model (e.g. `azure-openai/review-model:high`). Needs `AZURE_OPENAI_RESOURCE_NAME`, like any `azure-openai/*` model.
+- **OpenRouter and Azure OpenAI only.** An effort suffix on any other provider (`anthropic/...:high`, `azure-foundry/...:high`, `ollama/...:high`, or an `openrouter/*` model sent to `RUSTY_LLM_BASE_URL`) fails with a config error. It is not silently ignored.
+- The effort appears in the model name shown in review comments and logs (e.g. `openrouter/openai/gpt-6-luna:xhigh`, `azure/gpt-6-luna:xhigh`). Pattern matching for `RUSTY_LLM_JSON_PROMPT_INJECTION` / `RUSTY_LLM_NATIVE_STRUCTURED_OUTPUT` uses the id without the suffix.
 
 ### Model Inference Settings
 

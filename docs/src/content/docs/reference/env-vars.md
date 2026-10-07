@@ -9,7 +9,7 @@ Non-secret configuration lives in `RUSTY_*` env vars rather than action inputs, 
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `RUSTY_LLM_MODEL` | `anthropic/claude-sonnet-4-20250514` | LLM model in `provider/model` format |
+| `RUSTY_LLM_MODEL` | `anthropic/claude-sonnet-4-20250514` | LLM model in `provider/model` format. `openrouter/*` and `azure-openai/*` models accept an optional `:<effort>` suffix (`max`, `xhigh`, `high`, `medium`, `low`, `minimal`, `none`), also in `RUSTY_REVIEW_MODELS`, `RUSTY_JUDGE_MODEL` and `RUSTY_LLM_TRIAGE_MODEL`. See [LLM providers](/guides/llm-providers/#reasoning-effort) |
 | `RUSTY_REVIEW_STYLE` | `balanced` | One of `strict`, `balanced`, `lenient`, `roast`, `thorough` |
 | `RUSTY_FOCUS_AREAS` | all enabled | Comma-separated: `security,performance,bugs,style,tests,docs` |
 | `RUSTY_IGNORE_PATTERNS` | — | Comma-separated globs to skip (e.g. `*.lock,dist/**`) |
@@ -45,11 +45,12 @@ The managed identity vars (`RUSTY_AZURE_*`) take priority over the API-key vars 
 | `RUSTY_LLM_BASE_URL` | Base URL of an OpenAI-compatible endpoint (LiteLLM, vLLM, Ollama, …) |
 | `RUSTY_LLM_API_KEY` | API key for the custom endpoint (optional for unauthenticated local instances) |
 
-## Retries
+## Retries and step limits
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `RUSTY_LLM_MAX_RETRIES` | `2` | Max additional retries after a transient LLM error. Capped at the length of the built-in backoff schedule (2 entries today — values higher than that are silently lowered). Set to `0` to disable retries entirely. |
+| `RUSTY_LLM_MAX_STEPS` | `20` | Max tool-using steps per review pass. The last allowed step is always forced to `toolChoice: "none"`, so the model has to emit its final answer instead of ending on a tool call with no text. Empty or invalid values (non-numeric, below `1`) fall back to `20`. Mastra's own default would otherwise stop after 5 steps with no forced final answer, which leaves slower-investigating models (one tool call per step) with no structured output. |
 
 ## Temperature and top-p
 

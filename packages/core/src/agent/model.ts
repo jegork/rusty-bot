@@ -3,10 +3,35 @@ import { createAzure } from "@ai-sdk/azure";
 import { DefaultAzureCredential } from "@azure/identity";
 import { createOllama } from "ai-sdk-ollama";
 
+// the values openrouter's reasoning.effort accepts
+// (https://openrouter.ai/docs/guides/best-practices/reasoning-tokens);
+// @ai-sdk/azure's responses reasoningEffort accepts the same set
+export const REASONING_EFFORTS = [
+  "max",
+  "xhigh",
+  "high",
+  "medium",
+  "low",
+  "minimal",
+  "none",
+] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
 export type ModelConfig =
-  | { type: "router"; model: string }
-  | { type: "azure-api-key"; resourceName: string; deploymentName: string; apiKey: string }
-  | { type: "azure-managed-identity"; resourceName: string; deploymentName: string }
+  | { type: "router"; model: string; reasoningEffort?: ReasoningEffort }
+  | {
+      type: "azure-api-key";
+      resourceName: string;
+      deploymentName: string;
+      apiKey: string;
+      reasoningEffort?: ReasoningEffort;
+    }
+  | {
+      type: "azure-managed-identity";
+      resourceName: string;
+      deploymentName: string;
+      reasoningEffort?: ReasoningEffort;
+    }
   | { type: "azure-foundry-api-key"; resourceName: string; deploymentName: string; apiKey: string }
   | { type: "azure-foundry-managed-identity"; resourceName: string; deploymentName: string }
   | { type: "azure-anthropic-api-key"; baseUrl: string; deploymentName: string; apiKey: string }
@@ -14,9 +39,54 @@ export type ModelConfig =
   | { type: "openai-compatible"; baseUrl: string; model: string; apiKey?: string }
   | { type: "ollama"; baseUrl?: string; model: string; apiKey?: string };
 
-export function resolveModelConfig(): ModelConfig {
-  const model = process.env.RUSTY_LLM_MODEL ?? "anthropic/claude-sonnet-4-20250514";
+/**
+ * split an optional trailing `:<effort>` off a model string. only a known
+ * effort value is stripped, so openrouter variants (`:batch`, `:free`) and
+ * ollama tags (`:32b`, `:latest`) stay part of the id.
+ */
+export function parseModelEffort(model: string): {
+  model: string;
+  reasoningEffort?: ReasoningEffort;
+} {
+  const idx = model.lastIndexOf(":");
+  if (idx <= 0) return { model };
+  const suffix = model.slice(idx + 1);
+  if (!(REASONING_EFFORTS as readonly string[]).includes(suffix)) return { model };
+  return { model: model.slice(0, idx), reasoningEffort: suffix as ReasoningEffort };
+}
 
+export function resolveModelConfig(): ModelConfig {
+  const raw = process.env.RUSTY_LLM_MODEL ?? "anthropic/claude-sonnet-4-20250514";
+  const { model, reasoningEffort } = parseModelEffort(raw);
+  const config = resolveBaseModelConfig(model);
+  if (!reasoningEffort) return config;
+  if (!supportsReasoningEffort(model, config)) {
+    throw new Error(
+      `model "${raw}" sets reasoning effort ":${reasoningEffort}", but the effort suffix is only supported for openrouter/ and azure-openai/ models (this one resolved to ${config.type} "${getModelDisplayName(config)}"). remove the suffix or use an openrouter/ or azure-openai/ model.`,
+    );
+  }
+  return { ...config, reasoningEffort };
+}
+
+type EffortCapableModelConfig = Extract<
+  ModelConfig,
+  { type: "router" | "azure-api-key" | "azure-managed-identity" }
+>;
+
+function supportsReasoningEffort(
+  model: string,
+  config: ModelConfig,
+): config is EffortCapableModelConfig {
+  if (config.type === "router") return config.model.startsWith("openrouter/");
+  // the legacy RUSTY_AZURE_DEPLOYMENT override resolves to the same types for
+  // any model string, so require the prefix the effort was written against
+  if (config.type === "azure-api-key" || config.type === "azure-managed-identity") {
+    return model.startsWith("azure-openai/");
+  }
+  return false;
+}
+
+function resolveBaseModelConfig(model: string): ModelConfig {
   // azure-openai/<deployment> — derive deployment from the model prefix so a
   // single Azure resource can host multiple deployments (gpt-5.4-mini,
   // gpt-5.3-codex, etc.) and consensus passes can mix them.
@@ -331,13 +401,38 @@ export function resolveModel(
   }
 }
 
-export function resolveDefaultAgentOptions(
-  config: ModelConfig,
-): { providerOptions: { requesty: { auto_cache: true } } } | undefined {
-  if (process.env.RUSTY_PROMPT_CACHE === "false") return undefined;
+export function resolveDefaultAgentOptions(config: ModelConfig):
+  | {
+      providerOptions: {
+        requesty?: { auto_cache: true };
+        openrouter?: { reasoning: { effort: ReasoningEffort } };
+        azure?: { reasoningEffort: ReasoningEffort; forceReasoning: true };
+      };
+    }
+  | undefined {
+  if (config.type === "azure-api-key" || config.type === "azure-managed-identity") {
+    if (!config.reasoningEffort) return undefined;
+    // the sdk infers reasoning support from the model id, which on azure is a
+    // free-form deployment name; unforced, it drops the effort for names like
+    // "review-model" with only a warning
+    return {
+      providerOptions: {
+        azure: { reasoningEffort: config.reasoningEffort, forceReasoning: true as const },
+      },
+    };
+  }
   if (config.type !== "router") return undefined;
-  if (!config.model.startsWith("requesty/")) return undefined;
-  return { providerOptions: { requesty: { auto_cache: true } } };
+  const autoCache =
+    process.env.RUSTY_PROMPT_CACHE !== "false" && config.model.startsWith("requesty/");
+  if (!autoCache && !config.reasoningEffort) return undefined;
+  return {
+    providerOptions: {
+      ...(autoCache && { requesty: { auto_cache: true as const } }),
+      ...(config.reasoningEffort && {
+        openrouter: { reasoning: { effort: config.reasoningEffort } },
+      }),
+    },
+  };
 }
 
 export function supportsAnthropicCacheControl(config: ModelConfig): boolean {
@@ -544,12 +639,12 @@ const HARD_TEMPERATURE_LOCKS: HardTemperatureLock[] = [
   { pattern: /moonshot\/kimi-k2\.5/i, temperature: 1 },
 ];
 
-function findHardTemperatureLock(displayName: string): HardTemperatureLock | undefined {
-  return HARD_TEMPERATURE_LOCKS.find((entry) => entry.pattern.test(displayName));
+function findHardTemperatureLock(modelKey: string): HardTemperatureLock | undefined {
+  return HARD_TEMPERATURE_LOCKS.find((entry) => entry.pattern.test(modelKey));
 }
 
 export function applyModelConstraints(config: ModelConfig, settings: ModelSettings): ModelSettings {
-  const lock = findHardTemperatureLock(getModelDisplayName(config));
+  const lock = findHardTemperatureLock(modelMatchKey(config));
   if (!lock) return settings;
   if (settings.temperature === lock.temperature) return settings;
   return { ...settings, temperature: lock.temperature };
@@ -558,11 +653,12 @@ export function applyModelConstraints(config: ModelConfig, settings: ModelSettin
 export function getModelDisplayName(config: ModelConfig): string {
   switch (config.type) {
     case "router":
-      return config.model;
+      return config.reasoningEffort ? `${config.model}:${config.reasoningEffort}` : config.model;
     case "azure-api-key":
-      return `azure/${config.deploymentName}`;
     case "azure-managed-identity":
-      return `azure/${config.deploymentName}`;
+      return config.reasoningEffort
+        ? `azure/${config.deploymentName}:${config.reasoningEffort}`
+        : `azure/${config.deploymentName}`;
     case "azure-foundry-api-key":
       return `azure-foundry/${config.deploymentName}`;
     case "azure-foundry-managed-identity":

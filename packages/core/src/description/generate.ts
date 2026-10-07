@@ -7,6 +7,7 @@ import {
   resolveModelSettings,
   resolveJsonPromptInjection,
   applyModelConstraints,
+  resolveDefaultAgentOptions,
 } from "../agent/model.js";
 import { PRDescriptionOutputSchema, type PRDescriptionOutput } from "./schema.js";
 import { buildDescriptionSystemPrompt, buildDescriptionUserMessage } from "./prompt.js";
@@ -126,11 +127,13 @@ export async function generatePRDescription(
   const modelConfig = resolveModelConfig();
   const modelName = getModelDisplayName(modelConfig);
 
+  const defaultOptions = resolveDefaultAgentOptions(modelConfig);
   const agent = new Agent({
     id: "description-agent",
     name: "Rusty Bot Description Generator",
     instructions: () => buildDescriptionSystemPrompt(),
     model: () => resolveModel(modelConfig),
+    ...(defaultOptions && { defaultOptions }),
   });
 
   const incremental = options?.incremental === true;

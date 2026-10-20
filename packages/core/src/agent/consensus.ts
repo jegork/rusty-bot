@@ -100,7 +100,10 @@ export function deriveConsensusThreshold(
 ) {
   const requested = configuredThreshold ?? Math.floor(passes / 2) + 1;
   const threshold = Math.min(Math.max(1, Math.round(requested)), passes);
-  if (configuredThreshold != null && threshold !== configuredThreshold) {
+  if (
+    configuredThreshold != null &&
+    (configuredThreshold < 1 || !Number.isInteger(configuredThreshold))
+  ) {
     logger.warn(
       { configuredThreshold, passes, threshold },
       "consensus threshold out of range or fractional; clamped",

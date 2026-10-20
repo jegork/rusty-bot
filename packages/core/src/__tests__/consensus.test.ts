@@ -925,6 +925,7 @@ describe("deriveConsensusThreshold", () => {
     [0.5, 3, 1],
     [2.4, 3, 2],
     [5, 3, 3],
+    [3, 2, 2],
     [2, 3, 2],
     [null, 2, 2],
     [undefined, 3, 2],
@@ -946,6 +947,14 @@ describe("deriveConsensusThreshold", () => {
     deriveConsensusThreshold(2, 3);
     deriveConsensusThreshold(null, 3);
     expect(warnSpy).toHaveBeenCalledTimes(2);
+
+    deriveConsensusThreshold(-1, 3);
+    deriveConsensusThreshold(0.5, 3);
+    expect(warnSpy).toHaveBeenCalledTimes(4);
+
+    deriveConsensusThreshold(5, 3);
+    deriveConsensusThreshold(3, 2);
+    expect(warnSpy).toHaveBeenCalledTimes(4);
     warnSpy.mockRestore();
   });
 

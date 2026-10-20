@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { ReviewResult, Finding, ReviewConfig, PRMetadata } from "../types.js";
+import type { ReviewResult, Finding, ReviewConfig, PRMetadata, FilePatch } from "../types.js";
+import { compressDiff, countTokens } from "../diff/compress.js";
 
 function makeFinding(overrides: Partial<Finding> = {}): Finding {
   return {
@@ -744,5 +745,113 @@ describe("runConsensusReview scope creep", () => {
       { file: "src/a.ts", description: "pass 0 wording" },
       { file: "src/b.ts", description: "only pass 1 saw this" },
     ]);
+  });
+});
+
+describe("runConsensusReview per-pass diff rendering", () => {
+  function makePatch(path: string, addLines: number): FilePatch {
+    return {
+      path,
+      additions: addLines,
+      deletions: 0,
+      isBinary: false,
+      hunks: [
+        {
+          oldStart: 1,
+          oldLines: 0,
+          newStart: 1,
+          newLines: addLines,
+          content: Array.from({ length: addLines }, (_, i) => `+${path} line ${i}`).join("\n"),
+        },
+      ],
+    };
+  }
+
+  // distinct sizes so a size sort would erase the per-pass shuffle
+  const patches = ["a", "b", "c", "d", "e", "f"].map((n, i) => makePatch(`src/${n}.ts`, 3 + i * 2));
+
+  beforeEach(() => {
+    callCount = 0;
+    mockBehavior = "default";
+    delete process.env.RUSTY_REVIEW_MODELS;
+    process.env.RUSTY_REVIEW_ADAPTIVE_PASSES = "false";
+    vi.clearAllMocks();
+  });
+
+  async function passCalls() {
+    const { runReview } = await import("../agent/review.js");
+    return (runReview as ReturnType<typeof vi.fn>).mock.calls;
+  }
+
+  it("renders a differently ordered diff for each pass", async () => {
+    await runConsensusReview(
+      patches,
+      { ...config, consensusPasses: 3 },
+      prMetadata,
+      "single-pass diff",
+    );
+
+    const diffs = (await passCalls()).map((c) => c[1] as string);
+    expect(diffs).toHaveLength(3);
+    expect(diffs[0]).not.toBe(diffs[1]);
+    expect(diffs.every((d) => d !== "single-pass diff")).toBe(true);
+  });
+
+  it("applies the token budget to every pass and warns about skipped files", async () => {
+    const { logger } = await import("../logger.js");
+    const warnSpy = vi.spyOn(logger, "warn");
+    const maxTokens = 40;
+
+    await runConsensusReview(
+      patches,
+      { ...config, consensusPasses: 3 },
+      prMetadata,
+      "single-pass diff",
+      undefined,
+      { maxTokens },
+    );
+
+    const diffs = (await passCalls()).map((c) => c[1] as string);
+    for (const d of diffs) {
+      expect(countTokens(d)).toBeLessThanOrEqual(maxTokens + 2);
+      expect(d).not.toBe(compressDiff(patches, Infinity).compressed);
+    }
+    const skipWarns = warnSpy.mock.calls.filter(
+      (c) => typeof c[1] === "string" && c[1].includes("exceeded token budget"),
+    );
+    expect(skipWarns).toHaveLength(3);
+    warnSpy.mockRestore();
+  });
+
+  it("does not leak maxTokens into runReview options and keeps deadlineAt on every pass", async () => {
+    await runConsensusReview(
+      patches,
+      { ...config, consensusPasses: 3 },
+      prMetadata,
+      "single-pass diff",
+      undefined,
+      { maxTokens: 1000, deadlineAt: 123 },
+    );
+
+    for (const c of await passCalls()) {
+      const opts = c[4] as Record<string, unknown>;
+      expect(opts.deadlineAt).toBe(123);
+      expect(opts).not.toHaveProperty("maxTokens");
+    }
+  });
+
+  it("sends the caller's budget-bounded diff to the single-pass fallback", async () => {
+    await runConsensusReview(
+      patches,
+      { ...config, consensusPasses: 1 },
+      prMetadata,
+      "single-pass diff",
+      undefined,
+      { maxTokens: 10 },
+    );
+
+    const calls = await passCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toBe("single-pass diff");
   });
 });

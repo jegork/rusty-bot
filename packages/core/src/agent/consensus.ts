@@ -98,14 +98,22 @@ function deriveConsensusThreshold(configuredThreshold: number | null | undefined
   return Math.min(configuredThreshold ?? Math.floor(passes / 2) + 1, passes);
 }
 
+export interface ConsensusOptions extends RunReviewOptions {
+  /** token budget each pass renders its shuffled diff under; unbounded when omitted. */
+  maxTokens?: number;
+}
+
 export async function runConsensusReview(
   patches: FilePatch[],
   config: ReviewConfig,
   prMetadata: PRMetadata,
+  // budget-bounded diff, used by the single-pass fallback only; multi-pass
+  // renders its own per-pass order from `patches` and `options.maxTokens`
   diff: string,
   ticketContext?: TicketInfo[],
-  options?: RunReviewOptions,
+  consensusOptions?: ConsensusOptions,
 ): Promise<ReviewResult> {
+  const { maxTokens = Infinity, ...options } = consensusOptions ?? {};
   const configuredPasses = config.consensusPasses ?? DEFAULT_CONSENSUS_PASSES;
   const passPlan = planConsensusPasses(patches, configuredPasses);
   const passes = passPlan.passes;
@@ -114,8 +122,8 @@ export async function runConsensusReview(
     const [singlePassModel] = resolveReviewPassModelConfigs(1);
     return runReview(config, diff, prMetadata, ticketContext, {
       ...options,
-      modelConfig: options?.modelConfig ?? singlePassModel.config,
-      modelSettings: options?.modelSettings ?? singlePassModel.settings,
+      modelConfig: options.modelConfig ?? singlePassModel.config,
+      modelSettings: options.modelSettings ?? singlePassModel.settings,
     });
   }
 
@@ -136,7 +144,13 @@ export async function runConsensusReview(
 
   const passPromises = Array.from({ length: passes }, (_, i) => {
     const shuffled = shufflePatches(patches, baseSeed + i);
-    const { compressed } = compressDiff(shuffled, Infinity);
+    const { compressed, skippedFiles } = compressDiff(shuffled, maxTokens);
+    if (skippedFiles.length > 0) {
+      logger.warn(
+        { passIndex: i, prId: prMetadata.id, skippedFiles },
+        "consensus pass diff exceeded token budget; files skipped",
+      );
+    }
     const tickets = i === 0 ? ticketContext : undefined;
     const passModel = passModelConfigs[i];
     return runReview(config, compressed, prMetadata, tickets, {

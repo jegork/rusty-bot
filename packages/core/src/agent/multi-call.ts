@@ -388,7 +388,7 @@ async function runTieredReview(
       prMetadata,
       compressed,
       ticketContext,
-      { ...tierOptions, rankedContext, chunkFiles: patches.map((p) => p.path) },
+      { ...tierOptions, rankedContext, chunkFiles: patches.map((p) => p.path), maxTokens },
     );
     return [result];
   }
@@ -413,6 +413,7 @@ async function runTieredReview(
       ticketContext,
       {
         ...tierOptions,
+        maxTokens,
         openGrepFindings: groupOpenGrep,
         rankedContext: groupRankedContext,
         chunkFiles: [...groupPaths],
@@ -467,6 +468,7 @@ export async function runMultiCallReview(
         ...resolvedOptions,
         rankedContext,
         chunkFiles: patches.map((p) => p.path),
+        maxTokens,
       });
     } else {
       const groups = splitIntoGroups(patches, maxTokens);
@@ -505,6 +507,7 @@ export async function runMultiCallReview(
           ticketContext,
           {
             ...resolvedOptions,
+            maxTokens,
             otherPrFiles,
             openGrepFindings: groupOpenGrep,
             rankedContext: groupRankedContext,

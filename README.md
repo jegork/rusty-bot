@@ -310,6 +310,8 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 | `RUSTY_FLAG_SCOPE_CREEP` | list changes that fall outside the PR's stated intent in a "Scope Creep" section of the summary comment | `false` |
 | `RUSTY_LLM_MAX_RETRIES` | application-level retries on transient LLM errors (max 2) | `2` |
 | `RUSTY_LLM_MAX_STEPS` | cap on multi-step tool-using trajectories per review pass. The final allowed step is forced to `toolChoice: "none"` so the model has to emit text (and therefore structured output), which avoids tool-happy models — Anthropic in particular — terminating with `finishReason: "tool-calls"` and zero text. Unset, empty or invalid = 20. There is always a cap: without one, mastra stops after 5 steps with no forced final answer, so a model that makes one tool call per step ends mid-investigation with no JSON. | `20` |
+| `RUSTY_REVIEW_PASS_TIMEOUT_MS` | wall-clock budget in milliseconds for one review pass, including its retries. A pass that runs out of time is aborted and counts as failed, so consensus continues with the surviving passes. Unset, empty, non-numeric or below `1` = `480000` (8 minutes). | `480000` |
+| `RUSTY_REVIEW_DEADLINE_MS` | optional review-wide budget in milliseconds, measured from the start of the review. Every pass gets at most the time remaining; skim files whose pass hit the deadline are reported as not reviewed instead of being promoted to the deep tier. Unset or invalid = no deadline. | unset |
 | `RUSTY_LLM_STRUCTURING_MODEL` | model id for a separate structuring pass (e.g. `azure-openai/gpt-5.4-mini`). When set, the review model writes freeform prose with tools available and no schema pressure, and a cheap structuring model translates the prose into the required JSON. Eliminates the entire class of "model terminates with tool-calls and zero text" failures since the review model is no longer on the schema-output path. Adds one cheap LLM call per review pass. | — |
 | `RUSTY_LLM_JSON_PROMPT_INJECTION` | comma-separated model IDs (or `prefix*` wildcards) to force-on prompt-injected JSON output, overriding the auto-detected default | — |
 | `RUSTY_LLM_NATIVE_STRUCTURED_OUTPUT` | comma-separated model IDs (or `prefix*` wildcards) to force-on native `json_schema` structured output, overriding the auto-detected default | — |
@@ -623,6 +625,15 @@ Each CLI entry point calls `configureGlobalHttp()` at startup, which installs an
 These apply to **all** outbound `fetch` calls (LLM routes + GitHub/GitLab/ADO APIs). Raising the timeout never harms a fast request — it only delays the failure mode for slow ones.
 
 If you keep seeing headers-timeout failures on a specific consensus pass, bump `RUSTY_LLM_HEADERS_TIMEOUT_MS` to `900000` or `1200000`. If the failure persists past 15 minutes, the upstream model is genuinely stuck (not slow) — the right fix is to drop that model from `RUSTY_REVIEW_MODELS` rather than extend the timeout further.
+
+### Review Time Budgets
+
+The HTTP timeouts above bound a single request, but a review pass is a multi-step trajectory that can be restarted by the retry wrappers, so one stuck model could otherwise hold the whole review until the CI job was cancelled and nothing got posted. Two budgets bound that:
+
+- `RUSTY_REVIEW_PASS_TIMEOUT_MS` (default `480000`) caps one review pass, retries included. When it expires the in-flight call is aborted and the pass fails like any other failed pass: consensus lowers its threshold to the surviving passes and the summary footer reports `(N failed)` and `degraded`.
+- `RUSTY_REVIEW_DEADLINE_MS` (default unset) caps the whole review. Set it a couple of minutes below your CI job's timeout so the review posts what it has instead of being killed. Passes started late only get the time that remains.
+
+An aborted request is still billed for the tokens it already generated.
 
 ### Diagnostic Logging
 

@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.19.0](https://github.com/jegork/rusty-bot/compare/v1.18.0...v1.19.0) (2026-10-20)
+
+
+### Features
+
+* **consensus:** warn and flag homogeneous ensembles ([1921a05](https://github.com/jegork/rusty-bot/commit/1921a05fe124a9c90b3022213d25b7f864709826))
+
+
+### Bug Fixes
+
+* **consensus:** apply token budget to every consensus pass ([e9942fd](https://github.com/jegork/rusty-bot/commit/e9942fd9720d7fd25a91167a8c4c462a525f6543))
+* **consensus:** clamp threshold and validate consensus config ([845f8ca](https://github.com/jegork/rusty-bot/commit/845f8ca6c4d6130cc2572cdb613507275e5749ad))
+* **consensus:** preserve caller order through compressDiff ([bbf1b0a](https://github.com/jegork/rusty-bot/commit/bbf1b0a3140e950bee1ca3d1fff315ca0d3e27a2))
+* **consensus:** warn only on invalid configured thresholds ([0ff5533](https://github.com/jegork/rusty-bot/commit/0ff55332cf5ba917cfcab7f549482489f022400c))
+* **review:** bound each review pass with a time budget ([c471e29](https://github.com/jegork/rusty-bot/commit/c471e292c6a8e86fc0fd0ddd5ff917d4dcfc2d45))
+
+
+### Refactor
+
+* **core:** move normalizePath to a leaf module to break an import cycle ([393e35d](https://github.com/jegork/rusty-bot/commit/393e35dce76cbb9163921fe6ae5324e8315b275e))
+
+
+### Documentation
+
+* document RUSTY_FLAG_SCOPE_CREEP in .env.example ([05e638c](https://github.com/jegork/rusty-bot/commit/05e638c9c2b87eb45494d9dc33da41b74512e7a0))
+* document RUSTY_REVIEW_PASS_TIMEOUT_MS and RUSTY_REVIEW_DEADLINE_MS ([df9a308](https://github.com/jegork/rusty-bot/commit/df9a308571a4a9c70ecd58e3c353d4f99f32626e))
+
 ## [1.18.0](https://github.com/jegork/rusty-bot/compare/v1.17.1...v1.18.0) (2026-09-28)
 
 

@@ -11,7 +11,8 @@ import type {
 } from "../types.js";
 import { compressDiff } from "../diff/compress.js";
 import { shufflePatches } from "../diff/shuffle.js";
-import { clusterFindings, clusterObservations } from "./cluster.js";
+import { appendFileSync } from "node:fs";
+import { clusterFindings, clusterObservations, getClusterConfig } from "./cluster.js";
 import { runReview, type RunReviewOptions } from "./review.js";
 import { mergeMissingTests, mergeScopeCreep } from "./multi-call.js";
 import { resolveReviewPassModelConfigs } from "./model.js";
@@ -26,6 +27,23 @@ const RECOMMENDATION_SEVERITY: Record<Recommendation, number> = {
   address_before_merge: 1,
   critical_issues: 2,
 };
+
+// unset, empty, fractional, non-numeric or < 1 all read as "not provided"
+function readIntEnv(key: string): number | undefined {
+  const raw = process.env[key];
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1 ? n : undefined;
+}
+
+// sink for the raw-findings records; must never fail a review
+function appendRawFindingsRecord(path: string, record: Record<string, unknown>): void {
+  try {
+    appendFileSync(path, JSON.stringify(record) + "\n");
+  } catch (err) {
+    logger.warn({ err, path }, "failed to write raw findings record; continuing");
+  }
+}
 
 function deriveBaseSeed(prMetadata: PRMetadata): number {
   let hash = 0;
@@ -128,7 +146,8 @@ export async function runConsensusReview(
   consensusOptions?: ConsensusOptions,
 ): Promise<ReviewResult> {
   const { maxTokens = Infinity, ...options } = consensusOptions ?? {};
-  const configuredPasses = config.consensusPasses ?? DEFAULT_CONSENSUS_PASSES;
+  const configuredPasses =
+    config.consensusPasses ?? readIntEnv("RUSTY_CONSENSUS_PASSES") ?? DEFAULT_CONSENSUS_PASSES;
   const passPlan = planConsensusPasses(patches, configuredPasses);
   const passes = passPlan.passes;
 
@@ -141,7 +160,10 @@ export async function runConsensusReview(
     });
   }
 
-  const threshold = deriveConsensusThreshold(config.consensusThreshold, passes);
+  const threshold = deriveConsensusThreshold(
+    config.consensusThreshold ?? readIntEnv("RUSTY_CONSENSUS_THRESHOLD"),
+    passes,
+  );
   const baseSeed = deriveBaseSeed(prMetadata);
   const passModelConfigs = resolveReviewPassModelConfigs(passes);
   const distinctPassSetups = new Set(
@@ -154,6 +176,24 @@ export async function runConsensusReview(
       "consensus ensemble is homogeneous — passes of the same model measure self-consistency, not cross-model agreement",
     );
   }
+
+  const clusterConfig = getClusterConfig();
+  logger.info(
+    {
+      prId: prMetadata.id,
+      baseSeed,
+      passes,
+      threshold,
+      passModels: passModelConfigs.map((m) => m.displayName),
+      passSettings: passModelConfigs.map((m) => ({
+        temperature: m.settings.temperature,
+        topP: m.settings.topP,
+      })),
+      clusterConfig,
+      adaptivePasses: isAdaptivePassPlanningEnabled(),
+    },
+    "consensus run manifest",
+  );
 
   logger.info(
     {
@@ -268,28 +308,63 @@ export async function runConsensusReview(
   // saying the same thing (clustering's job is easy). prerequisite for
   // tuning the consensus threshold / Jaccard similarity / line proximity
   // window — see CONSENSUS-QUALITY-WRITEUP.md. defaults to no-op.
-  if (process.env.RUSTY_LOG_RAW_FINDINGS === "true") {
+  // RUSTY_LOG_RAW_FINDINGS_FILE additionally appends the same records as ndjson.
+  // records carry no snippets or suggested fixes so the file is safe to publish.
+  const logRawFindings = process.env.RUSTY_LOG_RAW_FINDINGS === "true";
+  const rawFindingsFile = logRawFindings
+    ? process.env.RUSTY_LOG_RAW_FINDINGS_FILE?.trim() || undefined
+    : undefined;
+  if (logRawFindings) {
+    if (rawFindingsFile) {
+      logger.info({ path: rawFindingsFile, prId: prMetadata.id }, "raw findings file sink active");
+    }
     for (let i = 0; i < results.length; i++) {
-      logger.debug(
-        {
-          prId: prMetadata.id,
-          passIndex: i,
-          model: passModelConfigs[i].displayName,
-          findingCount: results[i].findings.length,
-          findings: results[i].findings.map((f) => ({
-            file: f.file,
-            line: f.line,
-            severity: f.severity,
-            category: f.category,
-            message: f.message,
-          })),
-        },
-        "raw consensus pass findings before clustering",
-      );
+      const record = {
+        prId: prMetadata.id,
+        passIndex: i,
+        model: passModelConfigs[i].displayName,
+        findingCount: results[i].findings.length,
+        findings: results[i].findings.map((f) => ({
+          file: f.file,
+          line: f.line,
+          severity: f.severity,
+          category: f.category,
+          message: f.message,
+        })),
+      };
+      logger.debug(record, "raw consensus pass findings before clustering");
+      if (rawFindingsFile) {
+        appendRawFindingsRecord(rawFindingsFile, { kind: "pass", ...record });
+      }
     }
   }
 
   const findingClusters = clusterFindings(findingsByPass);
+
+  if (logRawFindings) {
+    const record = {
+      prId: prMetadata.id,
+      passes,
+      effectiveThreshold,
+      clusters: findingClusters.map((c) => ({
+        file: c.representative.file,
+        line: c.representative.line,
+        voteCount: c.voteCount,
+        surviving: c.voteCount >= effectiveThreshold,
+        variants: c.variants.map((v) => ({
+          line: v.line,
+          severity: v.severity,
+          category: v.category,
+          message: v.message,
+        })),
+      })),
+    };
+    logger.debug(record, "raw consensus clusters after clustering");
+    if (rawFindingsFile) {
+      appendRawFindingsRecord(rawFindingsFile, { kind: "clusters", ...record });
+    }
+  }
+
   const observationClusters = clusterObservations(observationsByPass);
 
   const survivingClusters = findingClusters.filter((c) => c.voteCount >= effectiveThreshold);

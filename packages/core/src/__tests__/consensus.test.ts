@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ReviewResult, Finding, ReviewConfig, PRMetadata, FilePatch } from "../types.js";
 import { compressDiff, countTokens } from "../diff/compress.js";
 
@@ -714,6 +717,195 @@ describe("RUSTY_LOG_RAW_FINDINGS", () => {
     );
     expect(rawFindingCalls).toHaveLength(0);
     debugSpy.mockRestore();
+  });
+});
+
+describe("raw findings cluster record and file sink", () => {
+  let dir: string;
+  beforeEach(() => {
+    callCount = 0;
+    mockBehavior = "default";
+    delete process.env.RUSTY_REVIEW_MODELS;
+    delete process.env.RUSTY_LOG_RAW_FINDINGS;
+    delete process.env.RUSTY_LOG_RAW_FINDINGS_FILE;
+    process.env.RUSTY_REVIEW_ADAPTIVE_PASSES = "false";
+    dir = mkdtempSync(join(tmpdir(), "raw-findings-"));
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    delete process.env.RUSTY_LOG_RAW_FINDINGS;
+    delete process.env.RUSTY_LOG_RAW_FINDINGS_FILE;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const clusterCalls = (spy: { mock: { calls: unknown[][] } }) =>
+    spy.mock.calls.filter(
+      (c) => typeof c[1] === "string" && c[1].includes("raw consensus clusters after clustering"),
+    );
+
+  it("emits a cluster record with variants when the flag is on", async () => {
+    process.env.RUSTY_LOG_RAW_FINDINGS = "true";
+    const { logger } = await import("../logger.js");
+    const debugSpy = vi.spyOn(logger, "debug");
+
+    await runConsensusReview([], { ...config, consensusPasses: 3 }, prMetadata, "diff content");
+
+    const calls = clusterCalls(debugSpy);
+    expect(calls).toHaveLength(1);
+    const record = calls[0][0] as {
+      effectiveThreshold: number;
+      clusters: { voteCount: number; surviving: boolean; variants: Record<string, unknown>[] }[];
+    };
+    expect(record.effectiveThreshold).toBe(2);
+    const shared = record.clusters.find((c) => c.voteCount === 2)!;
+    expect(shared.surviving).toBe(true);
+    expect(shared.variants.length).toBeGreaterThanOrEqual(2);
+    for (const v of shared.variants) {
+      expect(Object.keys(v).sort()).toEqual(["category", "line", "message", "severity"]);
+    }
+    expect(record.clusters.find((c) => c.voteCount === 1)!.surviving).toBe(false);
+    debugSpy.mockRestore();
+  });
+
+  it("omits the cluster record when the flag is off", async () => {
+    const { logger } = await import("../logger.js");
+    const debugSpy = vi.spyOn(logger, "debug");
+
+    await runConsensusReview([], { ...config, consensusPasses: 3 }, prMetadata, "diff content");
+
+    expect(clusterCalls(debugSpy)).toHaveLength(0);
+    debugSpy.mockRestore();
+  });
+
+  it("appends parseable ndjson records when flag and file are set", async () => {
+    process.env.RUSTY_LOG_RAW_FINDINGS = "true";
+    const path = join(dir, "raw.ndjson");
+    process.env.RUSTY_LOG_RAW_FINDINGS_FILE = path;
+
+    await runConsensusReview([], { ...config, consensusPasses: 3 }, prMetadata, "diff content");
+
+    const lines = readFileSync(path, "utf8").trim().split("\n");
+    const records = lines.map((l) => JSON.parse(l) as { kind: string });
+    expect(records.map((r) => r.kind)).toEqual(["pass", "pass", "pass", "clusters"]);
+  });
+
+  it("writes nothing when the file is set but the flag is off", async () => {
+    const path = join(dir, "raw.ndjson");
+    process.env.RUSTY_LOG_RAW_FINDINGS_FILE = path;
+
+    await runConsensusReview([], { ...config, consensusPasses: 3 }, prMetadata, "diff content");
+
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("warns instead of failing the review when the path is unwritable", async () => {
+    process.env.RUSTY_LOG_RAW_FINDINGS = "true";
+    process.env.RUSTY_LOG_RAW_FINDINGS_FILE = join(dir, "missing-dir", "raw.ndjson");
+    const { logger } = await import("../logger.js");
+    const warnSpy = vi.spyOn(logger, "warn");
+
+    const result = await runConsensusReview(
+      [],
+      { ...config, consensusPasses: 3 },
+      prMetadata,
+      "diff content",
+    );
+
+    expect(result.findings).toHaveLength(1);
+    expect(
+      warnSpy.mock.calls.some(
+        (c) => typeof c[1] === "string" && c[1].includes("failed to write raw findings record"),
+      ),
+    ).toBe(true);
+    warnSpy.mockRestore();
+  });
+});
+
+describe("consensus run manifest and env overrides", () => {
+  beforeEach(() => {
+    callCount = 0;
+    mockBehavior = "default";
+    delete process.env.RUSTY_REVIEW_MODELS;
+    delete process.env.RUSTY_CONSENSUS_PASSES;
+    delete process.env.RUSTY_CONSENSUS_THRESHOLD;
+    process.env.RUSTY_REVIEW_ADAPTIVE_PASSES = "false";
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    delete process.env.RUSTY_CONSENSUS_PASSES;
+    delete process.env.RUSTY_CONSENSUS_THRESHOLD;
+  });
+
+  const manifestCalls = (spy: { mock: { calls: unknown[][] } }) =>
+    spy.mock.calls.filter((c) => c[1] === "consensus run manifest");
+
+  it("emits exactly one manifest with resolved values", async () => {
+    const { logger } = await import("../logger.js");
+    const infoSpy = vi.spyOn(logger, "info");
+
+    await runConsensusReview([], { ...config, consensusPasses: 3 }, prMetadata, "diff content");
+
+    const calls = manifestCalls(infoSpy);
+    expect(calls).toHaveLength(1);
+    const m = calls[0][0] as Record<string, unknown>;
+    expect(m.prId).toBe("42");
+    expect(m.passes).toBe(3);
+    expect(m.threshold).toBe(2);
+    expect(m.baseSeed).toBeTypeOf("number");
+    expect(m.passModels).toHaveLength(3);
+    expect(m.passSettings).toHaveLength(3);
+    expect(m.clusterConfig).toEqual({ lineWindow: 5, jaccard: 0.3, categoryJaccard: 0.2 });
+    expect(m.adaptivePasses).toBe(false);
+    infoSpy.mockRestore();
+  });
+
+  it("honors RUSTY_CONSENSUS_PASSES and RUSTY_CONSENSUS_THRESHOLD when config is silent", async () => {
+    process.env.RUSTY_CONSENSUS_PASSES = "4";
+    process.env.RUSTY_CONSENSUS_THRESHOLD = "3";
+    const { logger } = await import("../logger.js");
+    const infoSpy = vi.spyOn(logger, "info");
+
+    await runConsensusReview([], config, prMetadata, "diff content");
+
+    const m = manifestCalls(infoSpy)[0][0] as Record<string, unknown>;
+    expect(m.passes).toBe(4);
+    expect(m.threshold).toBe(3);
+    infoSpy.mockRestore();
+  });
+
+  it("lets explicit config beat env", async () => {
+    process.env.RUSTY_CONSENSUS_PASSES = "5";
+    process.env.RUSTY_CONSENSUS_THRESHOLD = "5";
+    const { logger } = await import("../logger.js");
+    const infoSpy = vi.spyOn(logger, "info");
+
+    await runConsensusReview(
+      [],
+      { ...config, consensusPasses: 3, consensusThreshold: 1 },
+      prMetadata,
+      "diff content",
+    );
+
+    const m = manifestCalls(infoSpy)[0][0] as Record<string, unknown>;
+    expect(m.passes).toBe(3);
+    expect(m.threshold).toBe(1);
+    infoSpy.mockRestore();
+  });
+
+  it("falls back to defaults on empty, zero, fractional and garbage env", async () => {
+    const { logger } = await import("../logger.js");
+    for (const bad of ["", "0", "2.5", "abc", "-3"]) {
+      process.env.RUSTY_CONSENSUS_PASSES = bad;
+      process.env.RUSTY_CONSENSUS_THRESHOLD = bad;
+      const infoSpy = vi.spyOn(logger, "info");
+
+      await runConsensusReview([], config, prMetadata, "diff content");
+
+      const m = manifestCalls(infoSpy)[0][0] as Record<string, unknown>;
+      expect(m.passes).toBe(3);
+      expect(m.threshold).toBe(2);
+      infoSpy.mockRestore();
+    }
   });
 });
 

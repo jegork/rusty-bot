@@ -1,10 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import type { Finding, Observation } from "../types.js";
 import {
   tokenize,
   jaccardSimilarity,
   clusterFindings,
   clusterObservations,
+  getClusterConfig,
 } from "../agent/cluster.js";
 
 function makeFinding(overrides: Partial<Finding> = {}): Finding {
@@ -387,5 +388,43 @@ describe("clusterObservations", () => {
     const result = clusterObservations([[o1], [o2]]);
     expect(result).toHaveLength(1);
     expect(result[0].representative.severity).toBe("critical");
+  });
+});
+
+describe("getClusterConfig env overrides", () => {
+  const keys = [
+    "RUSTY_CLUSTER_LINE_WINDOW",
+    "RUSTY_CLUSTER_JACCARD",
+    "RUSTY_CLUSTER_CATEGORY_JACCARD",
+  ];
+  afterEach(() => {
+    delete process.env.RUSTY_CLUSTER_LINE_WINDOW;
+    delete process.env.RUSTY_CLUSTER_JACCARD;
+    delete process.env.RUSTY_CLUSTER_CATEGORY_JACCARD;
+  });
+
+  it("defaults to the historical constants", () => {
+    expect(getClusterConfig()).toEqual({ lineWindow: 5, jaccard: 0.3, categoryJaccard: 0.2 });
+  });
+
+  it("honors valid env values", () => {
+    process.env.RUSTY_CLUSTER_LINE_WINDOW = "12";
+    process.env.RUSTY_CLUSTER_JACCARD = "0.5";
+    process.env.RUSTY_CLUSTER_CATEGORY_JACCARD = "0";
+    expect(getClusterConfig()).toEqual({ lineWindow: 12, jaccard: 0.5, categoryJaccard: 0 });
+  });
+
+  it("falls back on empty, garbage, negative and non-finite values", () => {
+    for (const bad of ["", "abc", "-1", "Infinity", "NaN", "  "]) {
+      for (const k of keys) process.env[k] = bad;
+      expect(getClusterConfig()).toEqual({ lineWindow: 5, jaccard: 0.3, categoryJaccard: 0.2 });
+    }
+  });
+
+  it("changes clustering behavior when the line window is widened", () => {
+    const passes = [[makeFinding({ line: 10 })], [makeFinding({ line: 20 })]];
+    expect(clusterFindings(passes)).toHaveLength(2);
+    process.env.RUSTY_CLUSTER_LINE_WINDOW = "10";
+    expect(clusterFindings(passes)).toHaveLength(1);
   });
 });

@@ -81,4 +81,16 @@ jobs:
           # findings (hard clustering job) vs. the same ones (easy job).
           # see CONSENSUS-QUALITY-WRITEUP.md.
           RUSTY_LOG_RAW_FINDINGS: "true"
+          # docker actions mount the runner workspace at /github/workspace, so
+          # the ndjson written here is uploaded by the next step.
+          RUSTY_LOG_RAW_FINDINGS_FILE: /github/workspace/rusty-raw-findings.ndjson
           LOG_LEVEL: debug
+
+      - name: Upload raw findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-findings-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: ${{ github.workspace }}/rusty-raw-findings.ndjson
+          if-no-files-found: ignore
+          retention-days: 90

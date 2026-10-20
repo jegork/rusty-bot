@@ -65,6 +65,12 @@ The managed identity vars (`RUSTY_AZURE_*`) take priority over the API-key vars 
 | `RUSTY_REVIEW_TEMPERATURES` | `RUSTY_REVIEW_TEMPERATURE` | Comma-separated per-pass review temperatures |
 | `RUSTY_REVIEW_TOP_PS` | `RUSTY_REVIEW_TOP_P` | Comma-separated per-pass review top-p values |
 | `RUSTY_REVIEW_ADAPTIVE_PASSES` | `true` | Ordinary deep-review chunks use fewer consensus passes (2) while large or security-sensitive chunks keep up to 3. Set to `false` to force every chunk through the full pass count. |
+| `RUSTY_CONSENSUS_PASSES` | `3` | Consensus pass count when the repo config does not set `consensusPasses`. Must be an integer >= 1; invalid values fall back to the default |
+| `RUSTY_CONSENSUS_THRESHOLD` | majority of passes | Votes a finding needs to survive when the repo config does not set `consensusThreshold`. Integer >= 1, clamped to the pass count; invalid values fall back to the default |
+| `RUSTY_CLUSTER_LINE_WINDOW` | `5` | Max line distance for two findings to join one cluster. Non-negative number; invalid or empty values fall back to the default |
+| `RUSTY_CLUSTER_JACCARD` | `0.3` | Message Jaccard similarity needed to cluster findings of different categories |
+| `RUSTY_CLUSTER_CATEGORY_JACCARD` | `0.2` | Message Jaccard similarity needed to cluster findings of the same category |
+| `RUSTY_LOG_RAW_FINDINGS_FILE` | — | With `RUSTY_LOG_RAW_FINDINGS=true`, also append the per-pass and cluster records (including each cluster's variants) to this path as NDJSON, independent of `LOG_LEVEL`. Write failures only log a warning |
 | `RUSTY_TRIAGE_TEMPERATURE` | `RUSTY_LLM_TEMPERATURE` | Temperature override for the triage agent |
 | `RUSTY_JUDGE_TEMPERATURE` | `RUSTY_LLM_TEMPERATURE` | Temperature override for the judge agent |
 | `RUSTY_DESCRIPTION_TEMPERATURE` | `RUSTY_LLM_TEMPERATURE` | Temperature override for the description agent |

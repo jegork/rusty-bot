@@ -1,8 +1,20 @@
 import type { Finding, Observation, Severity, FocusArea } from "../types.js";
 
-const LINE_PROXIMITY_WINDOW = 5;
-const JACCARD_THRESHOLD = 0.3;
-const CATEGORY_BONUS_THRESHOLD = 0.2;
+function readNumericEnv(key: string, fallback: number): number {
+  const raw = process.env[key];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+// read per call (not at module load) so tests and A/B runs can flip env without re-importing
+export function getClusterConfig() {
+  return {
+    lineWindow: readNumericEnv("RUSTY_CLUSTER_LINE_WINDOW", 5),
+    jaccard: readNumericEnv("RUSTY_CLUSTER_JACCARD", 0.3),
+    categoryJaccard: readNumericEnv("RUSTY_CLUSTER_CATEGORY_JACCARD", 0.2),
+  };
+}
 
 export interface FindingCluster {
   representative: Finding;
@@ -64,6 +76,7 @@ function clusterItems<T extends Clusterable>(
   passResults: readonly (readonly T[])[],
 ): InternalCluster<T>[] {
   const clusters: InternalCluster<T>[] = [];
+  const { lineWindow, jaccard, categoryJaccard } = getClusterConfig();
 
   for (let passIndex = 0; passIndex < passResults.length; passIndex++) {
     const pass = passResults[passIndex];
@@ -74,11 +87,10 @@ function clusterItems<T extends Clusterable>(
       for (const cluster of clusters) {
         const rep = cluster.items[0].item;
         if (rep.file !== item.file) continue;
-        if (Math.abs(rep.line - item.line) > LINE_PROXIMITY_WINDOW) continue;
+        if (Math.abs(rep.line - item.line) > lineWindow) continue;
 
         const similarity = jaccardSimilarity(tokens, cluster.messageTokens);
-        const threshold =
-          rep.category === item.category ? CATEGORY_BONUS_THRESHOLD : JACCARD_THRESHOLD;
+        const threshold = rep.category === item.category ? categoryJaccard : jaccard;
 
         if (similarity >= threshold) {
           cluster.items.push({ item, passIndex });

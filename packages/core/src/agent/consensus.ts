@@ -36,6 +36,21 @@ function readIntEnv(key: string): number | undefined {
   return Number.isInteger(n) && n >= 1 ? n : undefined;
 }
 
+const MAX_ENV_CONSENSUS_PASSES = 5;
+
+function readPassesEnv(): number | undefined {
+  const passes = readIntEnv("RUSTY_CONSENSUS_PASSES");
+  if (passes !== undefined && passes <= MAX_ENV_CONSENSUS_PASSES) return passes;
+  const raw = process.env.RUSTY_CONSENSUS_PASSES;
+  if (raw !== undefined && raw.trim() !== "") {
+    logger.warn(
+      { variable: "RUSTY_CONSENSUS_PASSES", value: raw, max: MAX_ENV_CONSENSUS_PASSES },
+      "invalid consensus passes env; expected an integer from 1 to 5, using default",
+    );
+  }
+  return undefined;
+}
+
 // sink for the raw-findings records; must never fail a review
 function appendRawFindingsRecord(path: string, record: Record<string, unknown>): void {
   try {
@@ -146,8 +161,7 @@ export async function runConsensusReview(
   consensusOptions?: ConsensusOptions,
 ): Promise<ReviewResult> {
   const { maxTokens = Infinity, ...options } = consensusOptions ?? {};
-  const configuredPasses =
-    config.consensusPasses ?? readIntEnv("RUSTY_CONSENSUS_PASSES") ?? DEFAULT_CONSENSUS_PASSES;
+  const configuredPasses = config.consensusPasses ?? readPassesEnv() ?? DEFAULT_CONSENSUS_PASSES;
   const passPlan = planConsensusPasses(patches, configuredPasses);
   const passes = passPlan.passes;
 
@@ -226,12 +240,15 @@ export async function runConsensusReview(
 
   const settled = await Promise.allSettled(passPromises);
   const results: ReviewResult[] = [];
+  // original pass slot of each entry in `results`
+  const resultPassIndices: number[] = [];
   const failures: unknown[] = [];
 
   for (let i = 0; i < settled.length; i++) {
     const outcome = settled[i];
     if (outcome.status === "fulfilled") {
       results.push(outcome.value);
+      resultPassIndices.push(i);
     } else {
       failures.push(outcome.reason);
       logger.warn(
@@ -321,8 +338,8 @@ export async function runConsensusReview(
     for (let i = 0; i < results.length; i++) {
       const record = {
         prId: prMetadata.id,
-        passIndex: i,
-        model: passModelConfigs[i].displayName,
+        passIndex: resultPassIndices[i],
+        model: passModelConfigs[resultPassIndices[i]].displayName,
         findingCount: results[i].findings.length,
         findings: results[i].findings.map((f) => ({
           file: f.file,

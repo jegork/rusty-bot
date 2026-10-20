@@ -421,6 +421,21 @@ describe("getClusterConfig env overrides", () => {
     }
   });
 
+  it("rejects jaccard values above 1 but keeps large line windows", () => {
+    for (const bad of ["1.5", "30"]) {
+      process.env.RUSTY_CLUSTER_JACCARD = bad;
+      process.env.RUSTY_CLUSTER_CATEGORY_JACCARD = bad;
+      process.env.RUSTY_CLUSTER_LINE_WINDOW = bad;
+      expect(getClusterConfig()).toEqual({
+        lineWindow: Number(bad),
+        jaccard: 0.3,
+        categoryJaccard: 0.2,
+      });
+    }
+    process.env.RUSTY_CLUSTER_JACCARD = "1";
+    expect(getClusterConfig().jaccard).toBe(1);
+  });
+
   it("changes clustering behavior when the line window is widened", () => {
     const passes = [[makeFinding({ line: 10 })], [makeFinding({ line: 20 })]];
     expect(clusterFindings(passes)).toHaveLength(2);

@@ -279,11 +279,11 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 | `RUSTY_LOG_AGENT_STEPS` | when `true`, log a line per agent step (`stepNumber`, `finishReason`, `toolCallCount`, token usage); diagnostic for slow / tool-looping passes | `false` |
 | `RUSTY_LOG_RAW_FINDINGS` | when `true`, log each consensus pass's findings before clustering (file/line/severity/category/message); diagnostic for tuning Jaccard / line-proximity thresholds | `false` |
 | `RUSTY_LOG_RAW_FINDINGS_FILE` | with `RUSTY_LOG_RAW_FINDINGS=true`, also append the per-pass and cluster records (with each cluster's variants) to this path as NDJSON, regardless of `LOG_LEVEL`; write failures only warn | — |
-| `RUSTY_CONSENSUS_PASSES` | consensus pass count when the repo config does not set `consensusPasses` (integer >= 1; invalid values use the default) | `3` |
+| `RUSTY_CONSENSUS_PASSES` | consensus pass count when the repo config does not set `consensusPasses` (integer 1-5; anything else warns and uses the default) | `3` |
 | `RUSTY_CONSENSUS_THRESHOLD` | votes needed for a finding to survive when the repo config does not set `consensusThreshold` (integer >= 1, clamped to the pass count) | majority |
 | `RUSTY_CLUSTER_LINE_WINDOW` | max line distance for findings to join one cluster | `5` |
-| `RUSTY_CLUSTER_JACCARD` | message Jaccard similarity needed to cluster findings of different categories | `0.3` |
-| `RUSTY_CLUSTER_CATEGORY_JACCARD` | message Jaccard similarity needed to cluster findings of the same category | `0.2` |
+| `RUSTY_CLUSTER_JACCARD` | message Jaccard similarity needed to cluster findings of different categories (0-1; values outside use the default) | `0.3` |
+| `RUSTY_CLUSTER_CATEGORY_JACCARD` | message Jaccard similarity needed to cluster findings of the same category (0-1; values outside use the default) | `0.2` |
 | `RUSTY_LOG_JUDGE_SCORES` | when `true`, log every judge evaluation (not just rejections) at info level — file/line/severity/category/confidence/accepted/defaulted/reasoning; diagnostic for calibrating `RUSTY_JUDGE_THRESHOLD` | `false` |
 | `RUSTY_JIRA_BASE_URL` | Jira instance URL | — |
 | `RUSTY_JIRA_EMAIL` | Jira auth email | — |

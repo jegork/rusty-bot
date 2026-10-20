@@ -1,18 +1,18 @@
 import type { Finding, Observation, Severity, FocusArea } from "../types.js";
 
-function readNumericEnv(key: string, fallback: number): number {
+function readNumericEnv(key: string, fallback: number, max = Infinity): number {
   const raw = process.env[key];
   if (raw === undefined || raw.trim() === "") return fallback;
   const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
+  return Number.isFinite(n) && n >= 0 && n <= max ? n : fallback;
 }
 
 // read per call (not at module load) so tests and A/B runs can flip env without re-importing
 export function getClusterConfig() {
   return {
     lineWindow: readNumericEnv("RUSTY_CLUSTER_LINE_WINDOW", 5),
-    jaccard: readNumericEnv("RUSTY_CLUSTER_JACCARD", 0.3),
-    categoryJaccard: readNumericEnv("RUSTY_CLUSTER_CATEGORY_JACCARD", 0.2),
+    jaccard: readNumericEnv("RUSTY_CLUSTER_JACCARD", 0.3, 1),
+    categoryJaccard: readNumericEnv("RUSTY_CLUSTER_CATEGORY_JACCARD", 0.2, 1),
   };
 }
 

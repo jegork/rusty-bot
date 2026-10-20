@@ -798,6 +798,35 @@ describe("raw findings cluster record and file sink", () => {
     expect(existsSync(path)).toBe(false);
   });
 
+  it("attributes pass records to the original slot and model when an earlier pass failed", async () => {
+    process.env.RUSTY_LOG_RAW_FINDINGS = "true";
+    process.env.RUSTY_REVIEW_MODELS = "anthropic/model-a,anthropic/model-b,anthropic/model-c";
+    const path = join(dir, "raw.ndjson");
+    process.env.RUSTY_LOG_RAW_FINDINGS_FILE = path;
+    const { runReview } = await import("../agent/review.js");
+    (runReview as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("pass 0 fail"));
+    const { logger } = await import("../logger.js");
+    const infoSpy = vi.spyOn(logger, "info");
+
+    await runConsensusReview([], { ...config, consensusPasses: 3 }, prMetadata, "diff content");
+
+    const manifest = infoSpy.mock.calls.find((c) => c[1] === "consensus run manifest")![0] as {
+      passModels: string[];
+    };
+    const passRecords = readFileSync(path, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as { kind: string; passIndex: number; model: string })
+      .filter((r) => r.kind === "pass");
+    expect(passRecords.map((r) => r.passIndex)).toEqual([1, 2]);
+    expect(passRecords.map((r) => r.model)).toEqual([
+      manifest.passModels[1],
+      manifest.passModels[2],
+    ]);
+    expect(manifest.passModels[1]).not.toBe(manifest.passModels[0]);
+    infoSpy.mockRestore();
+  });
+
   it("warns instead of failing the review when the path is unwritable", async () => {
     process.env.RUSTY_LOG_RAW_FINDINGS = "true";
     process.env.RUSTY_LOG_RAW_FINDINGS_FILE = join(dir, "missing-dir", "raw.ndjson");
@@ -889,6 +918,36 @@ describe("consensus run manifest and env overrides", () => {
     const m = manifestCalls(infoSpy)[0][0] as Record<string, unknown>;
     expect(m.passes).toBe(3);
     expect(m.threshold).toBe(1);
+    infoSpy.mockRestore();
+  });
+
+  it("rejects RUSTY_CONSENSUS_PASSES above 5 with a single warn naming the variable", async () => {
+    process.env.RUSTY_CONSENSUS_PASSES = "30";
+    const { logger } = await import("../logger.js");
+    const infoSpy = vi.spyOn(logger, "info");
+    const warnSpy = vi.spyOn(logger, "warn");
+
+    await runConsensusReview([], config, prMetadata, "diff content");
+
+    const m = manifestCalls(infoSpy)[0][0] as Record<string, unknown>;
+    expect(m.passes).toBe(3);
+    const envWarns = warnSpy.mock.calls.filter(
+      (c) => (c[0] as Record<string, unknown>)?.variable === "RUSTY_CONSENSUS_PASSES",
+    );
+    expect(envWarns).toHaveLength(1);
+    expect((envWarns[0][0] as Record<string, unknown>).value).toBe("30");
+    infoSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it("accepts the 5-pass upper bound", async () => {
+    process.env.RUSTY_CONSENSUS_PASSES = "5";
+    const { logger } = await import("../logger.js");
+    const infoSpy = vi.spyOn(logger, "info");
+
+    await runConsensusReview([], config, prMetadata, "diff content");
+
+    expect((manifestCalls(infoSpy)[0][0] as Record<string, unknown>).passes).toBe(5);
     infoSpy.mockRestore();
   });
 

@@ -420,6 +420,8 @@ export interface RunReviewOptions {
   modelSettings?: ModelSettings;
   /** epoch ms after which no pass may keep running; stamped from RUSTY_REVIEW_DEADLINE_MS. */
   deadlineAt?: number;
+  /** search/file cache shared by every pass of one review; created at the multi-call entry points. */
+  toolCache?: ToolCache;
 }
 
 function buildTools(options?: RunReviewOptions): ToolsInput {
@@ -427,7 +429,7 @@ function buildTools(options?: RunReviewOptions): ToolsInput {
 
   const tools: ToolsInput = {};
   if (options?.provider) {
-    const cache = new ToolCache(options.provider, options.sourceRef ?? "HEAD");
+    const cache = options.toolCache ?? new ToolCache(options.provider, options.sourceRef ?? "HEAD");
     tools.searchCode = createSearchCodeTool(cache);
     if (options.sourceRef) {
       tools.getFileContext = createGetFileContextTool(cache);

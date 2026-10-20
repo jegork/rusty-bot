@@ -28,6 +28,7 @@ import {
   type ReviewTier,
 } from "./review.js";
 import { runConsensusReview } from "./consensus.js";
+import { ToolCache } from "./tool-cache.js";
 import { judgeReviewResult, resolveJudgeConfig } from "./judge.js";
 import { deriveMergedRecommendation } from "./recommendation.js";
 import { resolveReviewPassModelConfigs } from "./model.js";
@@ -46,6 +47,14 @@ function withReviewDeadline(options: RunReviewOptions): RunReviewOptions {
   const deadlineMs = readReviewDeadlineMs();
   if (deadlineMs === undefined || options.deadlineAt !== undefined) return options;
   return { ...options, deadlineAt: Date.now() + deadlineMs };
+}
+
+function withSharedToolCache(options: RunReviewOptions): RunReviewOptions {
+  if (!options.provider || options.toolCache) return options;
+  return {
+    ...options,
+    toolCache: new ToolCache(options.provider, options.sourceRef ?? "HEAD"),
+  };
 }
 
 const TICKET_COMPLIANCE_PRIORITY: Record<TicketComplianceStatus, number> = {
@@ -432,7 +441,7 @@ export async function runMultiCallReview(
   options?: MultiCallReviewOptions,
 ): Promise<ReviewResult> {
   const { mcpServers, maxTokens: maxTokensOpt, ...unstampedOptions } = options ?? {};
-  const reviewOptions = withReviewDeadline(unstampedOptions);
+  const reviewOptions = withSharedToolCache(withReviewDeadline(unstampedOptions));
   const maxTokens = maxTokensOpt ?? DEFAULT_MAX_TOKENS;
   const graphContextConfig = resolveGraphContextConfig();
 
@@ -553,7 +562,7 @@ export async function runCascadeReview(
   options?: MultiCallReviewOptions,
 ): Promise<ReviewResult> {
   const { mcpServers, maxTokens: maxTokensOpt, ...unstampedOptions } = options ?? {};
-  const reviewOptions = withReviewDeadline(unstampedOptions);
+  const reviewOptions = withSharedToolCache(withReviewDeadline(unstampedOptions));
   const maxTokens = maxTokensOpt ?? DEFAULT_MAX_TOKENS;
   const graphContextConfig = resolveGraphContextConfig();
 

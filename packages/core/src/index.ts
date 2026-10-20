@@ -34,6 +34,7 @@ export type {
   ScopeCreepItem,
 } from "./types.js";
 
+export { SearchUnavailableError, type SearchUnavailableReason } from "./agent/search-errors.js";
 export { getMastra, getStorage } from "./mastra.js";
 export { logger, flushLogger } from "./logger.js";
 export { configureGlobalHttp } from "./http-config.js";

@@ -371,6 +371,37 @@ describe("runMultiCallReview", () => {
     expect(secondCallOpts?.otherPrFiles).toContain("big1.ts");
   });
 
+  it("shares one toolCache across every chunk of a multi-call review", async () => {
+    const provider = { searchCode: vi.fn(), getFileContent: vi.fn() } as any;
+    const patches = [makePatch("big1.ts", 1000), makePatch("big2.ts", 1000)];
+    await runMultiCallReview(patches, config, prMetadata, undefined, {
+      maxTokens: 3000,
+      provider,
+    });
+
+    expect(runReviewMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const caches = runReviewMock.mock.calls.map((call) => call[4]?.toolCache);
+    expect(caches[0]).toBeDefined();
+    for (const cache of caches) expect(cache).toBe(caches[0]);
+  });
+
+  it("creates a fresh toolCache per review, not per process", async () => {
+    const provider = { searchCode: vi.fn(), getFileContent: vi.fn() } as any;
+    const patches = [makePatch("small.ts", 10)];
+    await runMultiCallReview(patches, config, prMetadata, undefined, { provider });
+    await runMultiCallReview(patches, config, prMetadata, undefined, { provider });
+
+    expect(runReviewMock.mock.calls[0][4]?.toolCache).not.toBe(
+      runReviewMock.mock.calls[1][4]?.toolCache,
+    );
+  });
+
+  it("does not create a toolCache without a provider", async () => {
+    await runMultiCallReview([makePatch("small.ts", 10)], config, prMetadata);
+
+    expect(runReviewMock.mock.calls[0][4]?.toolCache).toBeUndefined();
+  });
+
   it("does not pass otherPrFiles in single-call mode", async () => {
     const patches = [makePatch("small.ts", 10)];
     await runMultiCallReview(patches, config, prMetadata);
@@ -825,6 +856,24 @@ describe("runCascadeReview", () => {
 
     const deepOpts = deepCalls[0][4];
     expect(deepOpts?.otherPrFiles).toContain("tests/test_auth.py");
+  });
+
+  it("shares one toolCache between the skim and deep-review tiers", async () => {
+    const provider = { searchCode: vi.fn(), getFileContent: vi.fn() } as any;
+
+    await runCascadeReview(
+      [makePatch("tests/test_auth.py", 20)],
+      [makePatch("src/auth.ts", 20)],
+      config,
+      prMetadata,
+      undefined,
+      { provider },
+    );
+
+    const caches = runReviewMock.mock.calls.map((call) => call[4]?.toolCache);
+    expect(caches.length).toBeGreaterThanOrEqual(2);
+    expect(caches[0]).toBeDefined();
+    for (const cache of caches) expect(cache).toBe(caches[0]);
   });
 
   it("does not inject skim paths when there are no skim files", async () => {

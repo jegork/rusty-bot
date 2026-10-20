@@ -1,6 +1,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import type { ToolCache } from "./tool-cache.js";
+import { SearchUnavailableError } from "./search-errors.js";
 
 export const MAX_SEARCH_RESULTS = 5;
 export const MAX_SEARCH_FRAGMENT_CHARS = 300;
@@ -27,7 +28,9 @@ export function createSearchCodeTool(cache: ToolCache) {
       "Use this to verify whether removed or renamed exports are still used elsewhere " +
       `before reporting them as issues. Returns up to ${MAX_SEARCH_RESULTS} matches with ` +
       `snippets truncated to ${MAX_SEARCH_FRAGMENT_CHARS} characters; if totalMatches ` +
-      "exceeds shown, narrow the query to see more.",
+      "exceeds shown, narrow the query to see more. Results come from the repository's " +
+      "default branch, so symbols added or renamed in this PR will not be found. " +
+      "If the output has unavailable: true the search did not run; that is not evidence of absence.",
     inputSchema: z.object({
       query: z.string().describe("symbol name, function name, or search term to find usages of"),
     }),
@@ -41,8 +44,26 @@ export function createSearchCodeTool(cache: ToolCache) {
       ),
       totalMatches: z.number(),
       shown: z.number(),
+      unavailable: z.boolean().optional(),
+      note: z.string().optional(),
     }),
-    execute: async ({ query }) => capSearchResults(await cache.searchCode(query)),
+    execute: async ({ query }) => {
+      try {
+        return capSearchResults(await cache.searchCode(query));
+      } catch (err) {
+        if (!(err instanceof SearchUnavailableError)) throw err;
+        return {
+          results: [],
+          totalMatches: 0,
+          shown: 0,
+          unavailable: true,
+          note:
+            `code search is unavailable right now (${err.reason}). This is NOT evidence that ` +
+            "the symbol is unused — do not retry, and do not report unused/missing-reference " +
+            "findings that depend on it.",
+        };
+      }
+    },
   });
 }
 

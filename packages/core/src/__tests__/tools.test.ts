@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { SearchUnavailableError } from "../agent/search-errors.js";
 import {
+  createSearchCodeTool,
   capSearchResults,
   capFileContent,
   MAX_SEARCH_RESULTS,
@@ -126,5 +128,60 @@ describe("capFileContent", () => {
 
     expect(out.totalChars).toBe(total);
     expect(out.truncated).toBe(true);
+  });
+});
+
+describe("createSearchCodeTool", () => {
+  function run(cache: unknown) {
+    const tool = createSearchCodeTool(cache as any);
+    return tool.execute!({ query: "foo" }, {} as any) as Promise<any>;
+  }
+
+  it("reports unavailable with a not-evidence note when the search is rate limited", async () => {
+    const out = await run({
+      searchCode: async () => {
+        throw new SearchUnavailableError("rate_limited");
+      },
+    });
+
+    expect(out.unavailable).toBe(true);
+    expect(out.note).toContain("NOT evidence");
+    expect(out.note).toContain("rate_limited");
+    expect(out.results).toEqual([]);
+    expect(out.totalMatches).toBe(0);
+    expect(out.shown).toBe(0);
+  });
+
+  it("reports unavailable for a generic failed search", async () => {
+    const out = await run({
+      searchCode: async () => {
+        throw new SearchUnavailableError("failed");
+      },
+    });
+
+    expect(out.unavailable).toBe(true);
+    expect(out.note).toContain("failed");
+  });
+
+  it("rethrows errors that are not SearchUnavailableError", async () => {
+    await expect(
+      run({
+        searchCode: async () => {
+          throw new Error("boom");
+        },
+      }),
+    ).rejects.toThrow("boom");
+  });
+
+  it("does not set unavailable for a genuine empty result", async () => {
+    const out = await run({ searchCode: async () => ({ results: [], count: 0 }) });
+
+    expect(out).toEqual({ results: [], totalMatches: 0, shown: 0 });
+    expect("unavailable" in out).toBe(false);
+  });
+
+  it("mentions the default-branch limitation in the description", () => {
+    const tool = createSearchCodeTool({} as any);
+    expect(tool.description).toContain("default branch");
   });
 });

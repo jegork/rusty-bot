@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { ToolCache } from "../agent/tool-cache.js";
+import { SearchUnavailableError } from "../agent/search-errors.js";
 
 function makeProvider() {
   return {
@@ -74,5 +75,86 @@ describe("ToolCache", () => {
 
     expect(provider.searchCode).toHaveBeenCalledTimes(1);
     expect(provider.getFileContent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ToolCache search unavailability", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function makeRateLimitedProvider(retryAfterMs?: number) {
+    return {
+      searchCode: vi.fn(async () => {
+        throw new SearchUnavailableError("rate_limited", retryAfterMs);
+      }),
+      getFileContent: vi.fn(),
+    };
+  }
+
+  it("short-circuits every query during the cooldown without calling the provider", async () => {
+    const provider = makeRateLimitedProvider();
+    const cache = new ToolCache(provider as any, "main");
+
+    await expect(cache.searchCode("foo")).rejects.toBeInstanceOf(SearchUnavailableError);
+    await expect(cache.searchCode("bar")).rejects.toMatchObject({ reason: "rate_limited" });
+    await expect(cache.searchCode("foo")).rejects.toBeInstanceOf(SearchUnavailableError);
+
+    expect(provider.searchCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls the provider again once the cooldown has passed", async () => {
+    vi.useFakeTimers();
+    const provider = makeRateLimitedProvider();
+    const cache = new ToolCache(provider as any, "main");
+
+    await expect(cache.searchCode("foo")).rejects.toBeInstanceOf(SearchUnavailableError);
+    vi.advanceTimersByTime(59_000);
+    await expect(cache.searchCode("foo")).rejects.toBeInstanceOf(SearchUnavailableError);
+    expect(provider.searchCode).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(2_000);
+    await expect(cache.searchCode("foo")).rejects.toBeInstanceOf(SearchUnavailableError);
+    expect(provider.searchCode).toHaveBeenCalledTimes(2);
+  });
+
+  it("honours retryAfterMs from the error for the cooldown", async () => {
+    vi.useFakeTimers();
+    const provider = makeRateLimitedProvider(5_000);
+    const cache = new ToolCache(provider as any, "main");
+
+    await expect(cache.searchCode("foo")).rejects.toBeInstanceOf(SearchUnavailableError);
+    vi.advanceTimersByTime(6_000);
+    await expect(cache.searchCode("foo")).rejects.toBeInstanceOf(SearchUnavailableError);
+
+    expect(provider.searchCode).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not memoize a failed search forever", async () => {
+    const provider = {
+      searchCode: vi
+        .fn()
+        .mockRejectedValueOnce(new SearchUnavailableError("failed"))
+        .mockResolvedValueOnce([{ file: "a.ts", line: 1, content: "x" }]),
+      getFileContent: vi.fn(),
+    };
+    const cache = new ToolCache(provider as any, "main");
+
+    await expect(cache.searchCode("foo")).rejects.toMatchObject({ reason: "failed" });
+    const retry = await cache.searchCode("foo");
+
+    expect(retry.count).toBe(1);
+    expect(provider.searchCode).toHaveBeenCalledTimes(2);
+  });
+
+  it("still memoizes normal results per query", async () => {
+    const provider = makeProvider();
+    const cache = new ToolCache(provider as any, "main");
+
+    await cache.searchCode("foo");
+    await cache.searchCode("foo");
+    await cache.searchCode("bar");
+
+    expect(provider.searchCode).toHaveBeenCalledTimes(2);
   });
 });

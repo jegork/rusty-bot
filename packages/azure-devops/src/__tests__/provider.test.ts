@@ -835,6 +835,54 @@ describe("AzureDevOpsProvider", () => {
     });
   });
 
+  describe("searchCode", () => {
+    it("maps search results", async () => {
+      fetchSpy.mockResolvedValueOnce(mockFetchResponse({ results: [{ path: "/src/a.ts" }] }));
+
+      expect(await provider.searchCode("foo")).toEqual([
+        { file: "src/a.ts", line: 0, content: "" },
+      ]);
+    });
+
+    it("returns [] for a valid empty response", async () => {
+      fetchSpy.mockResolvedValueOnce(mockFetchResponse({ results: [] }));
+
+      expect(await provider.searchCode("foo")).toEqual([]);
+    });
+
+    it("throws failed for a non-ok response", async () => {
+      fetchSpy.mockResolvedValueOnce(mockFetchResponse({}, false, 500));
+
+      await expect(provider.searchCode("foo")).rejects.toMatchObject({
+        name: "SearchUnavailableError",
+        reason: "failed",
+      });
+    });
+
+    it("throws rate_limited for a 429 and reads retry-after", async () => {
+      const res = mockFetchResponse({}, false, 429);
+      (res as { headers: Headers }).headers = new Headers({ "retry-after": "7" });
+      fetchSpy.mockResolvedValueOnce(res);
+
+      await expect(provider.searchCode("foo")).rejects.toMatchObject({
+        reason: "rate_limited",
+        retryAfterMs: 7_000,
+      });
+    });
+
+    it("throws failed on a network error", async () => {
+      fetchSpy.mockRejectedValueOnce(new Error("ECONNRESET"));
+
+      await expect(provider.searchCode("foo")).rejects.toMatchObject({ reason: "failed" });
+    });
+
+    it("throws failed on a schema mismatch", async () => {
+      fetchSpy.mockResolvedValueOnce(mockFetchResponse({ results: "nope" }));
+
+      await expect(provider.searchCode("foo")).rejects.toMatchObject({ reason: "failed" });
+    });
+  });
+
   describe("getLinkedWorkItemIds", () => {
     it("returns work item ids from the PR work items endpoint", async () => {
       fetchSpy.mockResolvedValueOnce(

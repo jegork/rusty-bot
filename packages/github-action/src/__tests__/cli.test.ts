@@ -13,8 +13,9 @@ import { GitHubProvider, createOctokitIssueFetcher } from "@rusty-bot/github";
 import { parseConfig, runAction, type ActionConfig } from "../cli.js";
 import type { PullRequestEvent } from "../event.js";
 
-vi.mock("@rusty-bot/github", () => ({
+vi.mock("@rusty-bot/github", async () => ({
   GitHubProvider: vi.fn(),
+  RustyOctokit: (await import("octokit")).Octokit,
   createOctokitIssueFetcher: vi.fn(() => vi.fn()),
 }));
 

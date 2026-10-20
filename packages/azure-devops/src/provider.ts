@@ -11,6 +11,7 @@ import {
   encodePriorReviewContext,
   extractPriorReviewContext,
   formatInlineComment,
+  SearchUnavailableError,
 } from "@rusty-bot/core";
 import { structuredPatch } from "diff";
 import type { StructuredPatchHunk } from "diff";
@@ -445,16 +446,24 @@ export class AzureDevOpsProvider implements GitProvider {
           },
         }),
       });
-      if (!response.ok) return [];
+      if (!response.ok) {
+        const retryAfterSec = Number(response.headers.get("retry-after"));
+        throw new SearchUnavailableError(
+          response.status === 429 ? "rate_limited" : "failed",
+          retryAfterSec > 0 ? retryAfterSec * 1000 : undefined,
+        );
+      }
       const parsed = AdoSearchResultSchema.safeParse(await response.json());
-      if (!parsed.success) return [];
+      if (!parsed.success)
+        throw new SearchUnavailableError("failed", undefined, { cause: parsed.error });
       return (parsed.data.results ?? []).map((r) => ({
         file: r.path?.replace(/^\//, "") ?? r.fileName ?? "",
         line: 0,
         content: "",
       }));
-    } catch {
-      return [];
+    } catch (err) {
+      if (err instanceof SearchUnavailableError) throw err;
+      throw new SearchUnavailableError("failed", undefined, { cause: err });
     }
   }
 

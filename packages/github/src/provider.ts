@@ -14,11 +14,33 @@ import {
   extractPriorReviewContext,
   formatInlineComment,
   logger,
+  SearchUnavailableError,
 } from "@rusty-bot/core";
 
 const BOT_MARKER = "<!-- rusty-bot-review -->";
 const LAST_SHA_MARKER_RE = /<!--\s*rusty-bot:last-sha:([0-9a-f]{40})\s*-->/i;
 const log = logger.child({ package: "github", component: "provider" });
+
+function toSearchUnavailable(err: unknown): SearchUnavailableError {
+  const { status, message, response } = err as {
+    status?: number;
+    message?: string;
+    response?: { headers?: Record<string, string | number | undefined> };
+  };
+  const headers = response?.headers ?? {};
+  const rateLimited =
+    status === 429 ||
+    (status === 403 &&
+      (/rate limit/i.test(message ?? "") || String(headers["x-ratelimit-remaining"]) === "0"));
+  if (!rateLimited) return new SearchUnavailableError("failed", undefined, { cause: err });
+
+  const retryAfterSec = Number(headers["retry-after"]);
+  const resetAtSec = Number(headers["x-ratelimit-reset"]);
+  let retryAfterMs: number | undefined;
+  if (retryAfterSec > 0) retryAfterMs = retryAfterSec * 1000;
+  else if (resetAtSec > 0) retryAfterMs = Math.max(resetAtSec * 1000 - Date.now(), 0) || undefined;
+  return new SearchUnavailableError("rate_limited", retryAfterMs, { cause: err });
+}
 
 function buildLastShaMarker(sha: string): string {
   return `<!-- rusty-bot:last-sha:${sha} -->`;
@@ -319,8 +341,8 @@ export class GitHubProvider implements GitProvider {
         line: 0,
         content: item.text_matches?.[0]?.fragment ?? "",
       }));
-    } catch {
-      return [];
+    } catch (err) {
+      throw toSearchUnavailable(err);
     }
   }
 

@@ -425,6 +425,49 @@ describe("GitLabProvider", () => {
     });
   });
 
+  describe("searchCode", () => {
+    it("maps blob results", async () => {
+      fetchSpy.mockResolvedValueOnce(jsonResponse([{ path: "a.ts", startline: 3, data: "foo()" }]));
+
+      expect(await provider.searchCode("foo")).toEqual([
+        { file: "a.ts", line: 3, content: "foo()" },
+      ]);
+    });
+
+    it("returns [] for a valid empty response", async () => {
+      fetchSpy.mockResolvedValueOnce(jsonResponse([]));
+
+      expect(await provider.searchCode("foo")).toEqual([]);
+    });
+
+    it("throws failed for a non-ok response", async () => {
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ message: "boom" }, false, 500));
+
+      await expect(provider.searchCode("foo")).rejects.toMatchObject({
+        name: "SearchUnavailableError",
+        reason: "failed",
+      });
+    });
+
+    it("throws rate_limited for a 429", async () => {
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ message: "slow down" }, false, 429));
+
+      await expect(provider.searchCode("foo")).rejects.toMatchObject({ reason: "rate_limited" });
+    });
+
+    it("throws failed on a network error", async () => {
+      fetchSpy.mockRejectedValueOnce(new Error("ECONNRESET"));
+
+      await expect(provider.searchCode("foo")).rejects.toMatchObject({ reason: "failed" });
+    });
+
+    it("throws failed on a schema mismatch", async () => {
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ not: "an array" }));
+
+      await expect(provider.searchCode("foo")).rejects.toMatchObject({ reason: "failed" });
+    });
+  });
+
   describe("getLinkedIssueIids", () => {
     it("returns full references when present, else iid as string", async () => {
       fetchSpy.mockResolvedValueOnce(

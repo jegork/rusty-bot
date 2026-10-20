@@ -32,6 +32,83 @@ describe("GitHubProvider", () => {
     });
   });
 
+  describe("searchCode", () => {
+    function requestError(status: number, message: string, headers: Record<string, string> = {}) {
+      return Object.assign(new Error(message), { status, response: { headers } });
+    }
+
+    it("returns mapped results for a successful search", async () => {
+      octokit.request.mockResolvedValueOnce({
+        data: { items: [{ path: "a.ts", text_matches: [{ fragment: "foo()" }] }] },
+      });
+
+      expect(await provider.searchCode("foo")).toEqual([
+        { file: "a.ts", line: 0, content: "foo()" },
+      ]);
+    });
+
+    it("returns [] when the search ran and matched nothing", async () => {
+      octokit.request.mockResolvedValueOnce({ data: { items: [] } });
+
+      expect(await provider.searchCode("foo")).toEqual([]);
+    });
+
+    it("throws rate_limited for a 403 rate-limit response with retry-after", async () => {
+      octokit.request.mockRejectedValueOnce(
+        requestError(403, "API rate limit exceeded", { "retry-after": "30" }),
+      );
+
+      await expect(provider.searchCode("foo")).rejects.toMatchObject({
+        name: "SearchUnavailableError",
+        reason: "rate_limited",
+        retryAfterMs: 30_000,
+      });
+    });
+
+    it("throws rate_limited for a 403 with x-ratelimit-remaining 0 and derives the reset delay", async () => {
+      const resetAt = Math.floor(Date.now() / 1000) + 20;
+      octokit.request.mockRejectedValueOnce(
+        requestError(403, "Forbidden", {
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": String(resetAt),
+        }),
+      );
+
+      const err = await provider.searchCode("foo").catch((e: unknown) => e);
+
+      expect(err).toMatchObject({ reason: "rate_limited" });
+      expect((err as { retryAfterMs: number }).retryAfterMs).toBeGreaterThan(0);
+      expect((err as { retryAfterMs: number }).retryAfterMs).toBeLessThanOrEqual(20_000);
+    });
+
+    it("throws rate_limited for a 429", async () => {
+      octokit.request.mockRejectedValueOnce(requestError(429, "Too Many Requests"));
+
+      await expect(provider.searchCode("foo")).rejects.toMatchObject({ reason: "rate_limited" });
+    });
+
+    it("throws failed for a 403 that is not a rate limit", async () => {
+      octokit.request.mockRejectedValueOnce(requestError(403, "Resource not accessible"));
+
+      await expect(provider.searchCode("foo")).rejects.toMatchObject({ reason: "failed" });
+    });
+
+    it("throws failed for other request errors", async () => {
+      octokit.request.mockRejectedValueOnce(requestError(503, "Service Unavailable"));
+
+      await expect(provider.searchCode("foo")).rejects.toMatchObject({
+        name: "SearchUnavailableError",
+        reason: "failed",
+      });
+    });
+
+    it("throws failed for a network error without a status", async () => {
+      octokit.request.mockRejectedValueOnce(new Error("socket hang up"));
+
+      await expect(provider.searchCode("foo")).rejects.toMatchObject({ reason: "failed" });
+    });
+  });
+
   describe("getPRMetadata", () => {
     it("maps github response to PRMetadata", async () => {
       octokit.request.mockResolvedValueOnce({

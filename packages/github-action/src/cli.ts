@@ -1,4 +1,4 @@
-import { Octokit } from "octokit";
+import type { Octokit } from "octokit";
 import type {
   FilePatch,
   FocusArea,
@@ -39,7 +39,7 @@ import {
   buildPriorContextFromReview,
   configureGlobalHttp,
 } from "@rusty-bot/core";
-import { GitHubProvider, createOctokitIssueFetcher } from "@rusty-bot/github";
+import { GitHubProvider, RustyOctokit, createOctokitIssueFetcher } from "@rusty-bot/github";
 import {
   readEventPayload,
   parseOwnerRepo,
@@ -147,7 +147,7 @@ export function parseConfig({ event, env = process.env }: ParseConfigOptions): A
   const incrementalReview = env.RUSTY_INCREMENTAL_REVIEW !== "false";
   const flagScopeCreep = env.RUSTY_FLAG_SCOPE_CREEP === "true";
 
-  const octokit = new Octokit({ auth: token });
+  const octokit = new RustyOctokit({ auth: token });
 
   return {
     octokit,

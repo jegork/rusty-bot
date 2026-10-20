@@ -1,5 +1,6 @@
 export { GitHubProvider } from "./provider.js";
 export { createAppOctokit } from "./auth.js";
+export { RustyOctokit } from "./octokit.js";
 export { app } from "./server.js";
 export { orchestrateReview, createOctokitIssueFetcher } from "./orchestrator.js";
 export {

@@ -13,6 +13,7 @@ import {
   extractPriorReviewContext,
   formatInlineComment,
   logger,
+  SearchUnavailableError,
 } from "@rusty-bot/core";
 import type { z } from "zod";
 import {
@@ -287,14 +288,19 @@ export class GitLabProvider implements GitProvider {
       const url = `${this.projectBase}/search?scope=blobs&search=${encodeURIComponent(query)}&per_page=20`;
       const res = await this.fetchApi(url);
       const parsed = GitLabSearchResultSchema.safeParse(await res.json());
-      if (!parsed.success) return [];
+      if (!parsed.success)
+        throw new SearchUnavailableError("failed", undefined, { cause: parsed.error });
       return parsed.data.map((r) => ({
         file: r.path ?? r.filename ?? "",
         line: r.startline ?? 0,
         content: r.data ?? "",
       }));
-    } catch {
-      return [];
+    } catch (err) {
+      if (err instanceof SearchUnavailableError) throw err;
+      const rateLimited = err instanceof Error && err.message.startsWith("GitLab API error 429");
+      throw new SearchUnavailableError(rateLimited ? "rate_limited" : "failed", undefined, {
+        cause: err,
+      });
     }
   }
 

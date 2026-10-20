@@ -12,7 +12,7 @@ import {
   resolveJsonPromptInjection,
   applyModelConstraints,
 } from "../agent/model.js";
-import { normalizePath } from "../agent/multi-call.js";
+import { normalizePath } from "../diff/normalize-path.js";
 import { countTokens } from "../diff/compress.js";
 import { logger } from "../logger.js";
 

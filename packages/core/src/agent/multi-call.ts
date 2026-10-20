@@ -1,4 +1,5 @@
 import { compressDiff, countTokens } from "../diff/compress.js";
+import { normalizePath } from "../diff/normalize-path.js";
 import {
   buildGraphRankedContext,
   resolveGraphContextConfig,
@@ -122,13 +123,6 @@ async function buildRankedContextForPatches(
   );
 
   return result.renderedContext;
-}
-
-export function normalizePath(file: string): string {
-  return file
-    .replace(/\\/g, "/")
-    .replace(/^\.\//, "")
-    .replace(/:\d+(?::\d+)?$/, "");
 }
 
 export function filterOpenGrepForFiles(

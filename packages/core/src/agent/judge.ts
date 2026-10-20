@@ -13,7 +13,7 @@ import {
 import type { FilePatch, Finding, Hunk, ReviewResult } from "../types.js";
 import { logger } from "../logger.js";
 import { deriveMergedRecommendation } from "./recommendation.js";
-import { normalizePath } from "./multi-call.js";
+import { normalizePath } from "../diff/normalize-path.js";
 
 const EXCERPT_NO_HUNK =
   "(no diff excerpt available for this finding — judge it on its own merits; absence of an excerpt is not evidence against it)";

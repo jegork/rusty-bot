@@ -141,6 +141,16 @@ export async function runConsensusReview(
   const threshold = deriveConsensusThreshold(config.consensusThreshold, passes);
   const baseSeed = deriveBaseSeed(prMetadata);
   const passModelConfigs = resolveReviewPassModelConfigs(passes);
+  const distinctPassSetups = new Set(
+    passModelConfigs.map((m) => `${m.displayName}|${JSON.stringify(m.settings)}`),
+  );
+  const homogeneousEnsemble = distinctPassSetups.size < 2;
+  if (homogeneousEnsemble) {
+    logger.warn(
+      { passes, model: passModelConfigs[0].displayName, prId: prMetadata.id },
+      "consensus ensemble is homogeneous — passes of the same model measure self-consistency, not cross-model agreement",
+    );
+  }
 
   logger.info(
     {
@@ -372,6 +382,7 @@ export async function runConsensusReview(
         .map((s, i) => (s.status === "fulfilled" ? passModelConfigs[i].displayName : null))
         .filter((m): m is string => m !== null),
       ...(passPlan.reason ? { passPlanReason: passPlan.reason } : {}),
+      ...(homogeneousEnsemble ? { homogeneousEnsemble: true } : {}),
       failedPasses,
     },
     droppedFindings: droppedFindings.length > 0 ? droppedFindings : undefined,

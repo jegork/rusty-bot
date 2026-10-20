@@ -46,6 +46,9 @@ export interface ConsensusMetadata {
   agreementRate: number;
   recommendationElevated: boolean;
   passRecommendations: Recommendation[];
+  /** true when every pass ran the same model with the same settings, so
+   * agreement measures self-consistency rather than cross-model consensus. */
+  homogeneousEnsemble?: boolean;
   /** display names of every configured pass model, in slot order — includes
    * models whose pass failed. Use `successfulPassModels` for user-facing
    * attribution where credit should reflect what actually ran. */

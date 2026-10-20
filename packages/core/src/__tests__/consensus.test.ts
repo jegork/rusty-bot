@@ -856,6 +856,68 @@ describe("runConsensusReview per-pass diff rendering", () => {
   });
 });
 
+describe("runConsensusReview homogeneous ensemble detection", () => {
+  const homogeneousWarning = (calls: unknown[][]) =>
+    calls.filter((c) => typeof c[1] === "string" && c[1].includes("ensemble is homogeneous"));
+
+  beforeEach(() => {
+    callCount = 0;
+    mockBehavior = "default";
+    delete process.env.RUSTY_REVIEW_MODELS;
+    delete process.env.RUSTY_REVIEW_TEMPERATURES;
+    delete process.env.RUSTY_REVIEW_TOP_PS;
+    process.env.RUSTY_REVIEW_ADAPTIVE_PASSES = "false";
+    vi.clearAllMocks();
+  });
+
+  it("flags and warns when no review models are configured", async () => {
+    const { logger } = await import("../logger.js");
+    const warnSpy = vi.spyOn(logger, "warn");
+
+    const result = await runConsensusReview(
+      [],
+      { ...config, consensusPasses: 3 },
+      prMetadata,
+      "diff content",
+    );
+
+    expect(result.consensusMetadata?.homogeneousEnsemble).toBe(true);
+    expect(homogeneousWarning(warnSpy.mock.calls)).toHaveLength(1);
+    warnSpy.mockRestore();
+  });
+
+  it("does not flag an ensemble with distinct models", async () => {
+    process.env.RUSTY_REVIEW_MODELS = "anthropic/pass-1,openai/pass-2";
+    const { logger } = await import("../logger.js");
+    const warnSpy = vi.spyOn(logger, "warn");
+
+    const result = await runConsensusReview(
+      [],
+      { ...config, consensusPasses: 2 },
+      prMetadata,
+      "diff content",
+    );
+
+    expect(result.consensusMetadata?.homogeneousEnsemble).toBeFalsy();
+    expect(homogeneousWarning(warnSpy.mock.calls)).toHaveLength(0);
+    warnSpy.mockRestore();
+  });
+
+  it("does not flag the same model run with different temperatures", async () => {
+    process.env.RUSTY_REVIEW_MODELS = "anthropic/same,anthropic/same";
+    process.env.RUSTY_REVIEW_TEMPERATURES = "0.1,0.9";
+
+    const result = await runConsensusReview(
+      [],
+      { ...config, consensusPasses: 2 },
+      prMetadata,
+      "diff content",
+    );
+
+    expect(result.consensusMetadata?.homogeneousEnsemble).toBeFalsy();
+  });
+});
+
 describe("deriveConsensusThreshold", () => {
   it.each([
     [0, 3, 1],

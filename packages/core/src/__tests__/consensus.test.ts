@@ -59,7 +59,7 @@ vi.mock("../agent/review.js", () => ({
   }),
 }));
 
-const { runConsensusReview } = await import("../agent/consensus.js");
+const { runConsensusReview, deriveConsensusThreshold } = await import("../agent/consensus.js");
 
 const prMetadata: PRMetadata = {
   id: "42",
@@ -853,5 +853,50 @@ describe("runConsensusReview per-pass diff rendering", () => {
     const calls = await passCalls();
     expect(calls).toHaveLength(1);
     expect(calls[0][1]).toBe("single-pass diff");
+  });
+});
+
+describe("deriveConsensusThreshold", () => {
+  it.each([
+    [0, 3, 1],
+    [-1, 3, 1],
+    [0.5, 3, 1],
+    [2.4, 3, 2],
+    [5, 3, 3],
+    [2, 3, 2],
+    [null, 2, 2],
+    [undefined, 3, 2],
+    [null, 5, 3],
+  ])("(%s, %s) -> %s", (configured, passes, expected) => {
+    expect(deriveConsensusThreshold(configured, passes)).toBe(expected);
+  });
+
+  it("warns when the configured value was out of range or fractional", async () => {
+    const { logger } = await import("../logger.js");
+    const warnSpy = vi.spyOn(logger, "warn");
+
+    deriveConsensusThreshold(0, 3);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    deriveConsensusThreshold(2.4, 3);
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+
+    deriveConsensusThreshold(2, 3);
+    deriveConsensusThreshold(null, 3);
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    warnSpy.mockRestore();
+  });
+
+  it("never lets a zero threshold disable the vote gate", async () => {
+    process.env.RUSTY_REVIEW_ADAPTIVE_PASSES = "false";
+    callCount = 0;
+    mockBehavior = "default";
+    const result = await runConsensusReview(
+      [],
+      { ...config, consensusPasses: 3, consensusThreshold: 0 },
+      prMetadata,
+      "diff content",
+    );
+    expect(result.consensusMetadata?.threshold).toBe(1);
   });
 });

@@ -94,8 +94,19 @@ function planConsensusPasses(
   return { passes: Math.min(configuredPasses, 2), reason: "ordinary deep-review chunk" };
 }
 
-function deriveConsensusThreshold(configuredThreshold: number | null | undefined, passes: number) {
-  return Math.min(configuredThreshold ?? Math.floor(passes / 2) + 1, passes);
+export function deriveConsensusThreshold(
+  configuredThreshold: number | null | undefined,
+  passes: number,
+) {
+  const requested = configuredThreshold ?? Math.floor(passes / 2) + 1;
+  const threshold = Math.min(Math.max(1, Math.round(requested)), passes);
+  if (configuredThreshold != null && threshold !== configuredThreshold) {
+    logger.warn(
+      { configuredThreshold, passes, threshold },
+      "consensus threshold out of range or fractional; clamped",
+    );
+  }
+  return threshold;
 }
 
 export interface ConsensusOptions extends RunReviewOptions {

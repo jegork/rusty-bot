@@ -197,6 +197,31 @@ app.put("/api/config/repos/:owner/:repo", async (c) => {
   // out anything the user had previously set when omitted from the body
   const existing = await getRepoConfig(owner, repo);
 
+  if (
+    body.consensusPasses !== undefined &&
+    !(
+      Number.isInteger(body.consensusPasses) &&
+      body.consensusPasses >= 1 &&
+      body.consensusPasses <= 5
+    )
+  ) {
+    return c.json({ error: "consensusPasses must be an integer between 1 and 5" }, 400);
+  }
+
+  if (body.consensusThreshold !== undefined && body.consensusThreshold !== null) {
+    const maxThreshold = body.consensusPasses ?? existing?.consensusPasses ?? 5;
+    if (
+      !Number.isInteger(body.consensusThreshold) ||
+      body.consensusThreshold < 1 ||
+      body.consensusThreshold > maxThreshold
+    ) {
+      return c.json(
+        { error: `consensusThreshold must be an integer between 1 and ${maxThreshold}, or null` },
+        400,
+      );
+    }
+  }
+
   const config: RepoConfig = {
     ...(existing ?? {}),
     owner,
@@ -211,8 +236,10 @@ app.put("/api/config/repos/:owner/:repo", async (c) => {
     ...(typeof body.renameTitleToConventional === "boolean"
       ? { renameTitleToConventional: body.renameTitleToConventional }
       : {}),
-    ...(typeof body.consensusPasses === "number" ? { consensusPasses: body.consensusPasses } : {}),
-    ...("consensusThreshold" in body ? { consensusThreshold: body.consensusThreshold } : {}),
+    ...(body.consensusPasses !== undefined ? { consensusPasses: body.consensusPasses } : {}),
+    ...(body.consensusThreshold !== undefined
+      ? { consensusThreshold: body.consensusThreshold }
+      : {}),
   };
 
   await setRepoConfig(owner, repo, config);

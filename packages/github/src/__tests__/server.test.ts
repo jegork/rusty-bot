@@ -366,6 +366,52 @@ describe("server", () => {
       expect(body.error).toContain("invalid review style");
     });
 
+    describe("consensus settings validation", () => {
+      const put = (body: Record<string, unknown>) =>
+        app.request("/api/config/repos/org/repo", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+
+      it.each([
+        [{ consensusThreshold: 0 }],
+        [{ consensusThreshold: -1 }],
+        [{ consensusThreshold: 1.5 }],
+        [{ consensusThreshold: "2" }],
+        [{ consensusPasses: 0 }],
+        [{ consensusPasses: 6 }],
+        [{ consensusPasses: 2.5 }],
+        [{ consensusPasses: "3" }],
+        [{ consensusPasses: 2, consensusThreshold: 3 }],
+      ])("rejects %j with 400", async (body) => {
+        const res = await put(body);
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as Record<string, unknown>;
+        expect(json.error).toContain("consensus");
+      });
+
+      it("accepts valid passes and a threshold within them", async () => {
+        const res = await put({ consensusPasses: 3, consensusThreshold: 2 });
+        expect(res.status).toBe(200);
+        const json = (await res.json()) as Record<string, unknown>;
+        expect(json.consensusPasses).toBe(3);
+        expect(json.consensusThreshold).toBe(2);
+      });
+
+      it("accepts a null threshold to reset it", async () => {
+        const res = await put({ consensusThreshold: null });
+        expect(res.status).toBe(200);
+        const json = (await res.json()) as Record<string, unknown>;
+        expect(json.consensusThreshold).toBeNull();
+      });
+
+      it("validates a threshold against previously stored passes", async () => {
+        expect((await put({ consensusPasses: 2 })).status).toBe(200);
+        expect((await put({ consensusThreshold: 3 })).status).toBe(400);
+      });
+    });
+
     it("accepts the thorough review style", async () => {
       const putRes = await app.request("/api/config/repos/org/repo", {
         method: "PUT",

@@ -64,22 +64,23 @@ export function compressDiff(
     path: p.path,
     text: formatHunks(p),
     tokens: 0,
+    emitted: undefined as string | undefined,
   }));
 
   for (const f of formatted) {
     f.tokens = countTokens(f.text);
   }
 
-  // sort by token cost descending so largest files come first
-  formatted.sort((a, b) => b.tokens - a.tokens);
+  // selection favors the largest files, but emission keeps the caller's order so
+  // per-pass shuffles survive into the rendered diff
+  const bySize = [...formatted].sort((a, b) => b.tokens - a.tokens);
 
-  const included: string[] = [];
   const skippedFiles: string[] = [];
   let remaining = maxTokens;
 
-  for (const f of formatted) {
+  for (const f of bySize) {
     if (f.tokens <= remaining) {
-      included.push(f.text);
+      f.emitted = f.text;
       remaining -= f.tokens;
     } else if (remaining > 0) {
       // try to include partial hunks
@@ -95,7 +96,7 @@ export function compressDiff(
       }
 
       if (clipped.length > 1) {
-        included.push(clipped.join("\n"));
+        f.emitted = clipped.join("\n");
         remaining -= usedTokens;
       } else {
         skippedFiles.push(f.path);
@@ -104,6 +105,8 @@ export function compressDiff(
       skippedFiles.push(f.path);
     }
   }
+
+  const included = formatted.flatMap((f) => (f.emitted === undefined ? [] : [f.emitted]));
 
   return { compressed: included.join("\n\n"), skippedFiles };
 }

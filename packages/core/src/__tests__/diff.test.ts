@@ -455,7 +455,7 @@ describe("compressDiff", () => {
     expect(tightResult.compressed.length).toBeLessThan(fullResult.compressed.length);
   });
 
-  it("sorts files by token cost descending", () => {
+  it("emits files in caller order rather than by token cost", () => {
     const patches = [
       {
         path: "small.ts",
@@ -481,10 +481,10 @@ describe("compressDiff", () => {
       },
     ];
     const result = compressDiff(patches, 10000);
-    // big.ts should appear first since it has more tokens
+    // small.ts was passed first so it is emitted first
     const bigIdx = result.compressed.indexOf("## big.ts");
     const smallIdx = result.compressed.indexOf("## small.ts");
-    expect(bigIdx).toBeLessThan(smallIdx);
+    expect(smallIdx).toBeLessThan(bigIdx);
   });
 
   it("handles zero budget gracefully", () => {

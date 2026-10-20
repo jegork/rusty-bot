@@ -157,3 +157,53 @@ describe("compressDiff token-decrease benchmark", () => {
     expect(occurrences).toHaveLength(3);
   });
 });
+
+function simplePatch(path: string, addLines: number): FilePatch {
+  const content = Array.from({ length: addLines }, (_, i) => `+line ${path} ${i}`).join("\n");
+  return {
+    path,
+    additions: addLines,
+    deletions: 0,
+    isBinary: false,
+    hunks: [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: addLines, content }],
+  };
+}
+
+describe("compressDiff emission order", () => {
+  const small = simplePatch("small.ts", 2);
+  const medium = simplePatch("medium.ts", 10);
+  const large = simplePatch("large.ts", 30);
+
+  it("emits files in caller order when under budget", () => {
+    const a = compressDiff([small, medium, large], Infinity).compressed;
+    const b = compressDiff([large, small, medium], Infinity).compressed;
+    expect(a).not.toBe(b);
+    expect(a.indexOf("## small.ts")).toBeLessThan(a.indexOf("## medium.ts"));
+    expect(a.indexOf("## medium.ts")).toBeLessThan(a.indexOf("## large.ts"));
+    expect(b.indexOf("## large.ts")).toBeLessThan(b.indexOf("## small.ts"));
+  });
+
+  it("selects largest files first when over budget but emits in caller order", () => {
+    const largeTokens = countTokens(compressDiff([large], Infinity).compressed);
+    const { compressed, skippedFiles } = compressDiff([small, medium, large], largeTokens);
+    expect(compressed).toContain("## large.ts");
+    expect(compressed).not.toContain("## small.ts");
+    expect(compressed).not.toContain("## medium.ts");
+    expect(skippedFiles.sort()).toEqual(["medium.ts", "small.ts"]);
+
+    const smallTokens = countTokens(compressDiff([small], Infinity).compressed);
+    const both = compressDiff([small, large], largeTokens + smallTokens + 2);
+    expect(both.skippedFiles).toEqual([]);
+    expect(both.compressed.indexOf("## small.ts")).toBeLessThan(
+      both.compressed.indexOf("## large.ts"),
+    );
+  });
+
+  it("emits a clipped partial file at its caller position", () => {
+    const largeTokens = countTokens(compressDiff([large], Infinity).compressed);
+    const { compressed, skippedFiles } = compressDiff([small, large], largeTokens + 9);
+    expect(skippedFiles).toEqual([]);
+    expect(compressed).not.toContain("small.ts 1");
+    expect(compressed.indexOf("## small.ts")).toBeLessThan(compressed.indexOf("## large.ts"));
+  });
+});

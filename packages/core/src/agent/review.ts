@@ -139,6 +139,37 @@ function readLlmMaxSteps(): number {
   return Math.floor(n);
 }
 
+const DEFAULT_REVIEW_PASS_TIMEOUT_MS = 480_000;
+export const REVIEW_PASS_TIMEOUT_ERROR_ID = "REVIEW_PASS_TIMEOUT";
+
+function readPositiveMs(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) return undefined;
+  return Math.floor(n);
+}
+
+// wall-clock budget for one runReview call, retries included. unset/invalid = 8 minutes.
+export function readReviewPassTimeoutMs(): number {
+  return readPositiveMs("RUSTY_REVIEW_PASS_TIMEOUT_MS") ?? DEFAULT_REVIEW_PASS_TIMEOUT_MS;
+}
+
+// optional review-wide budget; unset/invalid = no deadline.
+export function readReviewDeadlineMs(): number | undefined {
+  return readPositiveMs("RUSTY_REVIEW_DEADLINE_MS");
+}
+
+export function isReviewPassTimeoutError(err: unknown): boolean {
+  return (err as { id?: unknown } | null)?.id === REVIEW_PASS_TIMEOUT_ERROR_ID;
+}
+
+function createReviewPassTimeoutError(budgetMs: number): Error {
+  const err = new Error(`review pass exceeded its ${budgetMs}ms time budget`);
+  (err as Error & { id?: string }).id = REVIEW_PASS_TIMEOUT_ERROR_ID;
+  return err;
+}
+
 /**
  * gated by `RUSTY_LOG_AGENT_STEPS=true`. when on, every agent step emits a
  * log line with `stepNumber`, `finishReason`, `toolCallCount`, and token
@@ -319,14 +350,20 @@ function augmentResponseWithStructurerRetry<T extends { usage?: StructurerRetryU
   };
 }
 
+interface RetryGuard {
+  /** aborted once the pass budget is spent; no further attempt may start after that. */
+  signal: AbortSignal;
+  bindings: Record<string, unknown>;
+}
+
 async function generateWithStructuredOutputRetry<T>(
   fn: () => Promise<T>,
-  bindings: Record<string, unknown> = {},
+  { signal, bindings }: RetryGuard,
 ): Promise<T> {
   try {
     return await fn();
   } catch (err) {
-    if (!isStructuredOutputValidationError(err)) throw err;
+    if (!isStructuredOutputValidationError(err) || signal.aborted) throw err;
     log.warn(
       { ...bindings, err },
       "structured output validation failed, retrying once before giving up on this pass",
@@ -337,7 +374,7 @@ async function generateWithStructuredOutputRetry<T>(
 
 async function generateWithTransientRetry<T>(
   fn: () => Promise<T>,
-  bindings: Record<string, unknown> = {},
+  { signal, bindings }: RetryGuard,
 ): Promise<T> {
   const maxRetries = readMaxTransientRetries();
   let lastErr: unknown;
@@ -346,13 +383,14 @@ async function generateWithTransientRetry<T>(
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (!isTransientRetryableError(err) || attempt === maxRetries) throw err;
+      if (!isTransientRetryableError(err) || attempt === maxRetries || signal.aborted) throw err;
       const backoffMs = TRANSIENT_RETRY_BACKOFF_MS[attempt];
       log.warn(
         { ...bindings, err, attempt: attempt + 1, maxRetries, backoffMs },
         "transient LLM error, retrying after backoff",
       );
       await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      signal.throwIfAborted();
     }
   }
   throw lastErr;
@@ -380,6 +418,8 @@ export interface RunReviewOptions {
   modelConfig?: ModelConfig;
   /** override used by consensus pass planning; defaults to review env settings. */
   modelSettings?: ModelSettings;
+  /** epoch ms after which no pass may keep running; stamped from RUSTY_REVIEW_DEADLINE_MS. */
+  deadlineAt?: number;
 }
 
 function buildTools(options?: RunReviewOptions): ToolsInput {
@@ -404,6 +444,11 @@ export async function runReview(
   options?: RunReviewOptions,
 ): Promise<ReviewResult> {
   const tier = options?.tier ?? "deep-review";
+  const budgetMs = Math.min(
+    readReviewPassTimeoutMs(),
+    options?.deadlineAt === undefined ? Infinity : options.deadlineAt - Date.now(),
+  );
+  if (budgetMs <= 0) throw createReviewPassTimeoutError(budgetMs);
   const systemPrompt = buildSystemPrompt(config, tier);
   const userMessage = buildUserMessage(
     diff,
@@ -475,10 +520,23 @@ export async function runReview(
     ...(structuringConfig && { structuringModel: getModelDisplayName(structuringConfig) }),
   };
   const onStepFinish = buildStepLogger(logBindings);
-  const response = await generateWithTransientRetry(
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // providers can ignore the abort signal, so the pass is also raced against it
+  const timedOut = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const err = createReviewPassTimeoutError(budgetMs);
+      log.warn({ ...logBindings, budgetMs }, "review pass exceeded its time budget, aborting");
+      controller.abort(err);
+      reject(err);
+    }, budgetMs);
+  });
+  const retryGuard: RetryGuard = { signal: controller.signal, bindings: logBindings };
+  const generation = generateWithTransientRetry(
     () =>
       generateWithStructuredOutputRetry(async () => {
         const r = await agent.generate(userMessage, {
+          abortSignal: controller.signal,
           structuredOutput: {
             schema,
             jsonPromptInjection,
@@ -550,9 +608,15 @@ export async function runReview(
           throw err;
         }
         return r;
-      }, logBindings),
-    logBindings,
+      }, retryGuard),
+    retryGuard,
   );
+  let response: Awaited<typeof generation>;
+  try {
+    response = await Promise.race([generation, timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
 
   const parsed = response.object;
   const usage = response.usage as {

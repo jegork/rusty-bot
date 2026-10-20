@@ -407,6 +407,40 @@ describe("runConsensusReview failure tolerance", () => {
     expect(result.consensusMetadata?.failedPasses).toBe(2);
   });
 
+  it("degrades when one pass hangs until its time budget rejects it", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runReview } = await import("../agent/review.js");
+      // stands in for the real runReview, which enforces its own budget
+      const timingOut = () =>
+        new Promise<never>((_, reject) =>
+          setTimeout(() => {
+            const err = new Error("review pass exceeded its time budget");
+            (err as Error & { id?: string }).id = "REVIEW_PASS_TIMEOUT";
+            reject(err);
+          }, 1000),
+        );
+      (runReview as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(makeResult({ findings: [sharedFinding], tokenCount: 100 }))
+        .mockReturnValueOnce(timingOut())
+        .mockResolvedValueOnce(makeResult({ findings: [sharedFinding], tokenCount: 100 }));
+
+      // threshold 3 of 3 passes: two survivors fall short, so the vote degrades
+      const consensusConfig = { ...config, consensusPasses: 3, consensusThreshold: 3 };
+      const pending = runConsensusReview([], consensusConfig, prMetadata, "diff content");
+      await vi.advanceTimersByTimeAsync(1000);
+      const result = await pending;
+
+      expect(result.consensusMetadata?.degraded).toBe(true);
+      expect(result.consensusMetadata?.failedPasses).toBe(1);
+      expect(result.consensusMetadata?.effectiveThreshold).toBe(2);
+      expect(result.findings).toHaveLength(1);
+      expect(result.findings[0].voteCount).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("degrades gracefully on 1/2 (the production failure mode this PR addresses)", async () => {
     const { runReview } = await import("../agent/review.js");
     (runReview as ReturnType<typeof vi.fn>)

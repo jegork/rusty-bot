@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { countTokens } from "../diff/compress.js";
 import type {
   FilePatch,
@@ -9,6 +9,7 @@ import type {
   GitProvider,
 } from "../types.js";
 import type { OpenGrepFinding } from "../opengrep/types.js";
+import type * as ReviewModule from "../agent/review.js";
 
 function makeMockReview(diff: string): ReviewResult {
   return {
@@ -34,7 +35,8 @@ function makeMockReview(diff: string): ReviewResult {
   };
 }
 
-vi.mock("../agent/review.js", () => ({
+vi.mock("../agent/review.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ReviewModule>()),
   runReview: vi.fn(async (_config, diff, _prMeta, _tickets, _opts) => makeMockReview(diff)),
 }));
 
@@ -1040,6 +1042,76 @@ describe("runCascadeReview tier failure tolerance", () => {
     await expect(
       runCascadeReview(skimPatches, deepPatches, config, prMetadata, undefined),
     ).rejects.toThrow("cascade review failed");
+  });
+
+  describe("with a review deadline", () => {
+    function timeoutError() {
+      const err = new Error("review pass exceeded its time budget");
+      (err as Error & { id?: string }).id = "REVIEW_PASS_TIMEOUT";
+      return err;
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      process.env.RUSTY_REVIEW_DEADLINE_MS = "1000";
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      delete process.env.RUSTY_REVIEW_DEADLINE_MS;
+    });
+
+    it("does not promote skim files when the skim tier ran out of time", async () => {
+      const deepDiffs: string[] = [];
+      // stands in for the real runReview, which enforces the budget itself
+      runReviewMock.mockImplementation(async (_config, diff, _prMeta, _tickets, opts) => {
+        if (opts?.tier === "skim") {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          throw timeoutError();
+        }
+        deepDiffs.push(diff);
+        return makeMockReview(diff);
+      });
+
+      const pending = runCascadeReview(skimPatches, deepPatches, config, prMetadata, undefined);
+      await vi.advanceTimersByTimeAsync(1000);
+      const result = await pending;
+
+      expect(deepDiffs.join("\n")).not.toContain("tests/test_auth.py");
+      expect(result.summary).toContain("not reviewed");
+      expect(result.summary).toContain("1 file(s)");
+    });
+
+    it("still promotes skim files when the skim tier failed for another reason", async () => {
+      const deepDiffs: string[] = [];
+      runReviewMock.mockImplementation(async (_config, diff, _prMeta, _tickets, opts) => {
+        if (opts?.tier === "skim") throw new Error("provider returned an empty completion");
+        deepDiffs.push(diff);
+        return makeMockReview(diff);
+      });
+
+      const result = await runCascadeReview(
+        skimPatches,
+        deepPatches,
+        config,
+        prMetadata,
+        undefined,
+      );
+
+      expect(deepDiffs.join("\n")).toContain("tests/test_auth.py");
+      expect(result.summary).not.toContain("not reviewed");
+    });
+
+    it("hands every pass the same deadline", async () => {
+      runReviewMock.mockImplementation(async (_config, diff) => makeMockReview(diff));
+
+      await runCascadeReview(skimPatches, deepPatches, config, prMetadata, undefined);
+
+      const deadlines = runReviewMock.mock.calls.map((call) => call[4]?.deadlineAt);
+      expect(deadlines.length).toBeGreaterThan(1);
+      expect(new Set(deadlines).size).toBe(1);
+      expect(deadlines[0]).toBe(Date.now() + 1000);
+    });
   });
 
   it("does not annotate the summary when every tier succeeded", async () => {

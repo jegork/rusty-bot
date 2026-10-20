@@ -922,3 +922,145 @@ describe("runReview scope creep", () => {
     expect(schema.shape).not.toHaveProperty("scopeCreep");
   });
 });
+
+describe("runReview pass time budget", () => {
+  beforeEach(() => {
+    generateMock.mockReset();
+    delete process.env.RUSTY_REVIEW_PASS_TIMEOUT_MS;
+    delete process.env.RUSTY_REVIEW_DEADLINE_MS;
+    delete process.env.RUSTY_LLM_MAX_RETRIES;
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    delete process.env.RUSTY_REVIEW_PASS_TIMEOUT_MS;
+  });
+
+  const hang = () => new Promise<never>(() => undefined);
+
+  function track<T>(promise: Promise<T>) {
+    const outcome: { error?: unknown; value?: T; settled: boolean } = { settled: false };
+    promise.then(
+      (value) => {
+        outcome.value = value;
+        outcome.settled = true;
+      },
+      (error: unknown) => {
+        outcome.error = error;
+        outcome.settled = true;
+      },
+    );
+    return outcome;
+  }
+
+  it("rejects with REVIEW_PASS_TIMEOUT when generate never settles", async () => {
+    process.env.RUSTY_REVIEW_PASS_TIMEOUT_MS = "1000";
+    generateMock.mockImplementation(hang);
+
+    const outcome = track(runReview(config, "diff", prMetadata));
+    await vi.advanceTimersByTimeAsync(999);
+    expect(outcome.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(outcome.settled).toBe(true);
+    expect((outcome.error as { id?: string }).id).toBe("REVIEW_PASS_TIMEOUT");
+  });
+
+  it("aborts the signal handed to generate when the budget runs out", async () => {
+    process.env.RUSTY_REVIEW_PASS_TIMEOUT_MS = "1000";
+    generateMock.mockImplementation(hang);
+
+    const outcome = track(runReview(config, "diff", prMetadata));
+    await vi.advanceTimersByTimeAsync(0);
+    const signal = generateMock.mock.calls[0][1].abortSignal as AbortSignal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(signal.aborted).toBe(true);
+    expect(outcome.settled).toBe(true);
+  });
+
+  it("does not retry a structured-output failure that lands after the budget", async () => {
+    process.env.RUSTY_REVIEW_PASS_TIMEOUT_MS = "1000";
+    generateMock.mockImplementation(
+      () =>
+        new Promise((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new FakeMastraError(
+                  "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
+                  "Structured output validation failed",
+                ),
+              ),
+            1500,
+          ),
+        ),
+    );
+
+    const outcome = track(runReview(config, "diff", prMetadata));
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(generateMock).toHaveBeenCalledTimes(1);
+    expect((outcome.error as { id?: string }).id).toBe("REVIEW_PASS_TIMEOUT");
+  });
+
+  it("does not retry a transient error once the budget ran out during backoff", async () => {
+    process.env.RUSTY_REVIEW_PASS_TIMEOUT_MS = "300";
+    generateMock.mockRejectedValue(new FakeApiCallError("upstream timeout", true));
+
+    const outcome = track(runReview(config, "diff", prMetadata));
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(generateMock).toHaveBeenCalledTimes(1);
+    expect((outcome.error as { id?: string }).id).toBe("REVIEW_PASS_TIMEOUT");
+  });
+
+  it("leaves a pass that finishes inside the budget untouched", async () => {
+    process.env.RUSTY_REVIEW_PASS_TIMEOUT_MS = "1000";
+    generateMock.mockResolvedValueOnce(makeValidResponse());
+
+    const outcome = track(runReview(config, "diff", prMetadata));
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(outcome.error).toBeUndefined();
+    expect(outcome.value?.recommendation).toBe("looks_good");
+    expect(generateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["abc", "-5", "0"])("falls back to the 8 minute default for %j", async (raw) => {
+    process.env.RUSTY_REVIEW_PASS_TIMEOUT_MS = raw;
+    generateMock.mockImplementation(hang);
+
+    const outcome = track(runReview(config, "diff", prMetadata));
+    await vi.advanceTimersByTimeAsync(479_999);
+    expect(outcome.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect((outcome.error as { id?: string }).id).toBe("REVIEW_PASS_TIMEOUT");
+  });
+
+  it("rejects without calling the model when the review deadline already passed", async () => {
+    const outcome = track(
+      runReview(config, "diff", prMetadata, undefined, { deadlineAt: Date.now() - 1 }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(generateMock).not.toHaveBeenCalled();
+    expect((outcome.error as { id?: string }).id).toBe("REVIEW_PASS_TIMEOUT");
+  });
+
+  it("caps the pass budget at the remaining review deadline", async () => {
+    generateMock.mockImplementation(hang);
+
+    const outcome = track(
+      runReview(config, "diff", prMetadata, undefined, { deadlineAt: Date.now() + 2_000 }),
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect((outcome.error as { id?: string }).id).toBe("REVIEW_PASS_TIMEOUT");
+  });
+});

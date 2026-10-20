@@ -20,7 +20,13 @@ import type {
   DroppedFinding,
 } from "../types.js";
 import type { OpenGrepFinding } from "../opengrep/types.js";
-import { runReview, type RunReviewOptions, type ReviewTier } from "./review.js";
+import {
+  runReview,
+  readReviewDeadlineMs,
+  isReviewPassTimeoutError,
+  type RunReviewOptions,
+  type ReviewTier,
+} from "./review.js";
 import { runConsensusReview } from "./consensus.js";
 import { judgeReviewResult, resolveJudgeConfig } from "./judge.js";
 import { deriveMergedRecommendation } from "./recommendation.js";
@@ -35,6 +41,13 @@ export interface MultiCallReviewOptions extends RunReviewOptions {
 }
 
 const DEFAULT_MAX_TOKENS = 60_000;
+
+function withReviewDeadline(options: RunReviewOptions): RunReviewOptions {
+  const deadlineMs = readReviewDeadlineMs();
+  if (deadlineMs === undefined || options.deadlineAt !== undefined) return options;
+  return { ...options, deadlineAt: Date.now() + deadlineMs };
+}
+
 const TICKET_COMPLIANCE_PRIORITY: Record<TicketComplianceStatus, number> = {
   addressed: 3,
   partially_addressed: 2,
@@ -417,7 +430,8 @@ export async function runMultiCallReview(
   ticketContext?: TicketInfo[],
   options?: MultiCallReviewOptions,
 ): Promise<ReviewResult> {
-  const { mcpServers, maxTokens: maxTokensOpt, ...reviewOptions } = options ?? {};
+  const { mcpServers, maxTokens: maxTokensOpt, ...unstampedOptions } = options ?? {};
+  const reviewOptions = withReviewDeadline(unstampedOptions);
   const maxTokens = maxTokensOpt ?? DEFAULT_MAX_TOKENS;
   const graphContextConfig = resolveGraphContextConfig();
 
@@ -535,7 +549,8 @@ export async function runCascadeReview(
   ticketContext: TicketInfo[] | undefined,
   options?: MultiCallReviewOptions,
 ): Promise<ReviewResult> {
-  const { mcpServers, maxTokens: maxTokensOpt, ...reviewOptions } = options ?? {};
+  const { mcpServers, maxTokens: maxTokensOpt, ...unstampedOptions } = options ?? {};
+  const reviewOptions = withReviewDeadline(unstampedOptions);
   const maxTokens = maxTokensOpt ?? DEFAULT_MAX_TOKENS;
   const graphContextConfig = resolveGraphContextConfig();
 
@@ -607,8 +622,15 @@ export async function runCascadeReview(
     // costs more than the skim pass would have; reviewing the files beats
     // reporting on files nobody looked at.
     const skimFailed = tierFailures.some((f) => f.tier === "skim");
-    const effectiveDeepPatches = skimFailed ? [...deepPatches, ...skimPatches] : deepPatches;
-    if (skimFailed && skimPatches.length > 0) {
+    // when the review deadline killed the skim tier there is no time left for
+    // a promoted deep pass either, so its files are reported as unreviewed
+    const skimTimedOut =
+      resolvedOptions.deadlineAt !== undefined &&
+      Date.now() >= resolvedOptions.deadlineAt &&
+      tierFailures.some((f) => f.tier === "skim" && isReviewPassTimeoutError(f.err));
+    const promoteSkim = skimFailed && !skimTimedOut;
+    const effectiveDeepPatches = promoteSkim ? [...deepPatches, ...skimPatches] : deepPatches;
+    if (promoteSkim && skimPatches.length > 0) {
       logger.warn(
         { promotedFiles: skimPatches.length, prId: prMetadata.id },
         "skim tier failed; promoting its files to the deep-review tier",
@@ -620,7 +642,7 @@ export async function runCascadeReview(
     // as skim should still count as evidence when evaluating "add tests" requirements).
     // promoted files are in the deep patch set itself, so listing them as
     // context-only files too would tell the model they're out of scope.
-    const skimFilePaths = skimFailed ? [] : skimPatches.map((p) => p.path);
+    const skimFilePaths = promoteSkim ? [] : skimPatches.map((p) => p.path);
     const deepOptionsWithSkimContext: RunReviewOptions =
       skimFilePaths.length > 0
         ? {
@@ -672,6 +694,9 @@ export async function runCascadeReview(
     // promoted into it, and both dying throws above rather than reaching here.
     if (tierFailures.some((f) => f.tier === "deep-review")) {
       merged.summary = `${merged.summary}\n\n_Note: the deep-review pass failed, so ${effectiveDeepPatches.length} file(s) in this PR were not reviewed._`;
+    }
+    if (skimTimedOut && skimPatches.length > 0) {
+      merged.summary = `${merged.summary}\n\n_Note: the skim pass ran out of time, so ${skimPatches.length} file(s) in this PR were not reviewed._`;
     }
 
     const allPatches = [...skimPatches, ...deepPatches];

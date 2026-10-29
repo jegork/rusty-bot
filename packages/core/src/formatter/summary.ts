@@ -10,6 +10,7 @@ import type {
   TicketResolutionStatus,
   ScopeCreepItem,
 } from "../types.js";
+import { stripPriorContextMarkers } from "../agent/prior-context.js";
 
 const SEVERITY_ORDER: Severity[] = ["critical", "warning", "suggestion"];
 
@@ -350,7 +351,7 @@ export function formatSummaryComment(
   lines.push("");
   lines.push("## Summary");
   lines.push("");
-  lines.push(review.summary);
+  lines.push(stripPriorContextMarkers(review.summary));
   lines.push("");
   lines.push("---");
   lines.push("");

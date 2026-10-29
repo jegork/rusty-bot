@@ -8,7 +8,6 @@ import type {
 import { ReviewStyleSchema } from "@rusty-bot/core";
 import {
   filterFiles,
-  stripDeletionOnlyHunks,
   expandContext,
   summarizeLanguages,
   extractTicketRefs,
@@ -174,8 +173,7 @@ async function main(): Promise<void> {
 
   rawPatches ??= await provider.getDiff();
 
-  const filtered = filterFiles(rawPatches, config.ignorePatterns);
-  const reviewable = stripDeletionOnlyHunks(filtered);
+  const reviewable = filterFiles(rawPatches, config.ignorePatterns);
   const skippedCount = rawPatches.length - reviewable.length;
   log.info(
     {

@@ -9,7 +9,6 @@ import type {
 import {
   ReviewStyleSchema,
   filterFiles,
-  stripDeletionOnlyHunks,
   expandContext,
   summarizeLanguages,
   extractTicketRefs,
@@ -260,8 +259,7 @@ export async function runReview(config: GitLabCliConfig): Promise<number> {
 
   rawPatches ??= await provider.getDiff();
 
-  const filtered = filterFiles(rawPatches, reviewConfig.ignorePatterns);
-  const reviewable = stripDeletionOnlyHunks(filtered);
+  const reviewable = filterFiles(rawPatches, reviewConfig.ignorePatterns);
   const skippedCount = rawPatches.length - reviewable.length;
   log.info(
     {

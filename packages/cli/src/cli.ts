@@ -15,7 +15,6 @@ import {
   runMultiCallReview,
   runTriage,
   splitByClassification,
-  stripDeletionOnlyHunks,
   summarizeLanguages,
   type Finding,
   type ReviewConfig,
@@ -76,8 +75,7 @@ export async function run(args: CliArgs): Promise<number> {
     return 0;
   }
 
-  const filtered = filterFiles(rawPatches, reviewConfig.ignorePatterns);
-  const reviewable = stripDeletionOnlyHunks(filtered);
+  const reviewable = filterFiles(rawPatches, reviewConfig.ignorePatterns);
   log.info({ total: rawPatches.length, reviewed: reviewable.length }, "files changed");
 
   if (reviewable.length === 0) {

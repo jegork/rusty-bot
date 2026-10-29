@@ -3,7 +3,6 @@ import type { FocusArea, IssueFetcher, TicketProvider, TicketRef } from "@rusty-
 import {
   parseDiff,
   filterFiles,
-  stripDeletionOnlyHunks,
   expandContext,
   summarizeLanguages,
   extractTicketRefs,
@@ -127,8 +126,7 @@ export async function orchestrateReview(params: {
     };
 
     const patches = parseDiff(rawDiff);
-    const filtered = filterFiles(patches, config.ignorePatterns);
-    const reviewable = stripDeletionOnlyHunks(filtered);
+    const reviewable = filterFiles(patches, config.ignorePatterns);
 
     const shouldRenameTitle =
       repoConfig?.renameTitleToConventional ??

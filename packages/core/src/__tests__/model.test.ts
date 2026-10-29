@@ -6,7 +6,6 @@ import {
   resolveModelConfigWithOverride,
   resolveReviewPassModelConfigs,
   getModelDisplayName,
-  resolveDefaultAgentOptions,
   resolveDisableThinking,
   resolveJsonPromptInjection,
   supportsAnthropicCacheControl,
@@ -518,28 +517,26 @@ describe("applyModelConstraints", () => {
   });
 });
 
-describe("resolveDefaultAgentOptions", () => {
+describe("resolveProviderOptions", () => {
   beforeEach(clearEnv);
 
   it("returns auto_cache providerOptions for requesty/ router models", () => {
-    const opts = resolveDefaultAgentOptions({
+    const opts = resolveProviderOptions({
       type: "router",
       model: "requesty/anthropic/claude-sonnet-4",
     });
-    expect(opts).toEqual({
-      providerOptions: { requesty: { auto_cache: true } },
-    });
+    expect(opts).toEqual({ requesty: { auto_cache: true } });
   });
 
   it("returns undefined for non-requesty router models", () => {
     expect(
-      resolveDefaultAgentOptions({ type: "router", model: "anthropic/claude-sonnet" }),
+      resolveProviderOptions({ type: "router", model: "anthropic/claude-sonnet" }),
     ).toBeUndefined();
   });
 
   it("returns undefined for non-router configs", () => {
     expect(
-      resolveDefaultAgentOptions({
+      resolveProviderOptions({
         type: "azure-api-key",
         resourceName: "r",
         deploymentName: "d",
@@ -547,7 +544,7 @@ describe("resolveDefaultAgentOptions", () => {
       }),
     ).toBeUndefined();
     expect(
-      resolveDefaultAgentOptions({
+      resolveProviderOptions({
         type: "openai-compatible",
         baseUrl: "https://litellm.example.com/v1",
         model: "anything",
@@ -558,7 +555,7 @@ describe("resolveDefaultAgentOptions", () => {
   it("returns undefined when RUSTY_PROMPT_CACHE=false even for requesty/ models", () => {
     process.env.RUSTY_PROMPT_CACHE = "false";
     expect(
-      resolveDefaultAgentOptions({
+      resolveProviderOptions({
         type: "router",
         model: "requesty/anthropic/claude-sonnet-4",
       }),
@@ -1332,7 +1329,7 @@ describe("model:effort suffix", () => {
     process.env.RUSTY_LLM_MODEL = "openrouter/x/y:batch";
     const config = resolveModelConfig();
     expect(config).toEqual({ type: "router", model: "openrouter/x/y:batch" });
-    expect(resolveDefaultAgentOptions(config)).toBeUndefined();
+    expect(resolveProviderOptions(config)).toBeUndefined();
   });
 
   it("keeps the variant and applies the effort for variant:effort", () => {
@@ -1418,27 +1415,27 @@ describe("model:effort suffix", () => {
 
   it("sends the azure effort as providerOptions.azure and forces reasoning mode", () => {
     expect(
-      resolveDefaultAgentOptions({
+      resolveProviderOptions({
         type: "azure-api-key",
         resourceName: "r",
         deploymentName: "review-model",
         apiKey: "k",
         reasoningEffort: "high",
       }),
-    ).toEqual({ providerOptions: { azure: { reasoningEffort: "high", forceReasoning: true } } });
+    ).toEqual({ azure: { reasoningEffort: "high", forceReasoning: true } });
     expect(
-      resolveDefaultAgentOptions({
+      resolveProviderOptions({
         type: "azure-managed-identity",
         resourceName: "r",
         deploymentName: "review-model",
         reasoningEffort: "low",
       }),
-    ).toEqual({ providerOptions: { azure: { reasoningEffort: "low", forceReasoning: true } } });
+    ).toEqual({ azure: { reasoningEffort: "low", forceReasoning: true } });
   });
 
   it("sends no provider options for an azure-openai model without an effort", () => {
     expect(
-      resolveDefaultAgentOptions({
+      resolveProviderOptions({
         type: "azure-api-key",
         resourceName: "r",
         deploymentName: "gpt-6-luna",
@@ -1490,37 +1487,35 @@ describe("model:effort suffix", () => {
 
   it("sends the effort as providerOptions.openrouter.reasoning.effort", () => {
     expect(
-      resolveDefaultAgentOptions({
+      resolveProviderOptions({
         type: "router",
         model: "openrouter/openai/gpt-6-luna",
         reasoningEffort: "xhigh",
       }),
-    ).toEqual({ providerOptions: { openrouter: { reasoning: { effort: "xhigh" } } } });
+    ).toEqual({ openrouter: { reasoning: { effort: "xhigh" } } });
   });
 
   it("still sends the effort when prompt caching is disabled", () => {
     process.env.RUSTY_PROMPT_CACHE = "false";
     expect(
-      resolveDefaultAgentOptions({
+      resolveProviderOptions({
         type: "router",
         model: "openrouter/x/y",
         reasoningEffort: "low",
       }),
-    ).toEqual({ providerOptions: { openrouter: { reasoning: { effort: "low" } } } });
+    ).toEqual({ openrouter: { reasoning: { effort: "low" } } });
   });
 
   it("merges the effort with requesty auto_cache options", () => {
     expect(
-      resolveDefaultAgentOptions({
+      resolveProviderOptions({
         type: "router",
         model: "requesty/openrouter/x",
         reasoningEffort: "high",
       }),
     ).toEqual({
-      providerOptions: {
-        requesty: { auto_cache: true },
-        openrouter: { reasoning: { effort: "high" } },
-      },
+      requesty: { auto_cache: true },
+      openrouter: { reasoning: { effort: "high" } },
     });
   });
 

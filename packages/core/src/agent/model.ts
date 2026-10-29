@@ -477,13 +477,6 @@ export function resolveProviderOptions(config: ModelConfig): ProviderOptions | u
   return options;
 }
 
-export function resolveDefaultAgentOptions(
-  config: ModelConfig,
-): { providerOptions: ProviderOptions } | undefined {
-  const providerOptions = resolveProviderOptions(config);
-  return providerOptions && { providerOptions };
-}
-
 export function supportsAnthropicCacheControl(config: ModelConfig): boolean {
   if (
     config.type === "azure-anthropic-api-key" ||

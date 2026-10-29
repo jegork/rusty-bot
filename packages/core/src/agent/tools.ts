@@ -1,4 +1,4 @@
-import { createTool } from "@mastra/core/tools";
+import { tool } from "ai";
 import { z } from "zod";
 import type { ToolCache } from "./tool-cache.js";
 import { SearchUnavailableError } from "./search-errors.js";
@@ -21,8 +21,7 @@ export function capSearchResults(input: {
 }
 
 export function createSearchCodeTool(cache: ToolCache) {
-  return createTool({
-    id: "search-code",
+  return tool({
     description:
       "Search the codebase for references to a symbol, function name, import, or string. " +
       "Use this to verify whether removed or renamed exports are still used elsewhere " +
@@ -88,8 +87,7 @@ export function capFileContent(input: { content: string | null }) {
 }
 
 export function createGetFileContextTool(cache: ToolCache) {
-  return createTool({
-    id: "get-file-context",
+  return tool({
     description:
       "Fetch the content of a file from the repository. " +
       "Use this when you need to see more context around a change than what the diff " +

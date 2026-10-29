@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { MastraMCPServerDefinition } from "@mastra/mcp";
 
 const StdioServerSchema = z
   .object({
@@ -20,4 +19,4 @@ const ServerEntrySchema = z.union([StdioServerSchema, HttpServerSchema]);
 
 export const McpServerConfigSchema = z.record(z.string(), ServerEntrySchema);
 
-export type McpServerConfig = Record<string, MastraMCPServerDefinition>;
+export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;

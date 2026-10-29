@@ -1,14 +1,11 @@
-import { Agent } from "@mastra/core/agent";
 import { compressDiff } from "../diff/compress.js";
 import {
   resolveModelConfig,
-  resolveModel,
   getModelDisplayName,
   resolveModelSettings,
-  resolveJsonPromptInjection,
   applyModelConstraints,
-  resolveDefaultAgentOptions,
 } from "../agent/model.js";
+import { generateStructured } from "../agent/generate.js";
 import { PRDescriptionOutputSchema, type PRDescriptionOutput } from "./schema.js";
 import { buildDescriptionSystemPrompt, buildDescriptionUserMessage } from "./prompt.js";
 import type { FilePatch, PRMetadata } from "../types.js";
@@ -127,28 +124,22 @@ export async function generatePRDescription(
   const modelConfig = resolveModelConfig();
   const modelName = getModelDisplayName(modelConfig);
 
-  const defaultOptions = resolveDefaultAgentOptions(modelConfig);
-  const agent = new Agent({
-    id: "description-agent",
-    name: "Rusty Bot Description Generator",
-    instructions: () => buildDescriptionSystemPrompt(),
-    model: () => resolveModel(modelConfig),
-    ...(defaultOptions && { defaultOptions }),
-  });
-
   const incremental = options?.incremental === true;
   const userMessage = buildDescriptionUserMessage(compressed, prMetadata, existingDescription, {
     incremental,
   });
 
   const modelSettings = applyModelConstraints(modelConfig, resolveModelSettings("description"));
-  const jsonPromptInjection = resolveJsonPromptInjection(modelConfig);
-  const response = await agent.generate(userMessage, {
-    structuredOutput: { schema: PRDescriptionOutputSchema, jsonPromptInjection },
-    ...(Object.keys(modelSettings).length > 0 && { modelSettings }),
+  const response = await generateStructured({
+    modelConfig,
+    system: buildDescriptionSystemPrompt(),
+    prompt: userMessage,
+    schema: PRDescriptionOutputSchema,
+    settings: modelSettings,
   });
 
   const parsed = response.object;
+  if (!parsed) throw new Error("description generation returned no parseable object");
   const tokenCount = response.usage.totalTokens ?? 0;
 
   return {

@@ -133,16 +133,16 @@ The `actions/checkout` step gives the reviewer read-only search over the PR's co
 
 **Action inputs** (secret-bearing only — everything else flows through `env:`):
 
-| Input                  | Notes                                                                                                            |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `github-token`         | Defaults to `${{ github.token }}`; the built-in token works when the `permissions:` block above is set           |
-| `anthropic-api-key`    | Required when `RUSTY_LLM_MODEL` targets an `anthropic/*` model                                                   |
-| `openai-api-key`       | Required when `RUSTY_LLM_MODEL` targets an `openai/*` model                                                      |
-| `google-api-key`       | Required when `RUSTY_LLM_MODEL` targets a `google/*` model                                                       |
-| `azure-openai-api-key` | Required when `RUSTY_LLM_MODEL` targets an `azure-openai/*` model                                                |
-| `llm-api-key`          | API key for an OpenAI-compatible endpoint (set together with `RUSTY_LLM_BASE_URL`, e.g. LiteLLM, Requesty, vLLM) |
-| `jira-api-token`       | Enable Jira ticket compliance (combine with `RUSTY_JIRA_BASE_URL` + `RUSTY_JIRA_EMAIL` env)                      |
-| `linear-api-key`       | Enable Linear ticket compliance                                                                                  |
+| Input | Notes |
+|---|---|
+| `github-token` | Defaults to `${{ github.token }}`; the built-in token works when the `permissions:` block above is set |
+| `anthropic-api-key` | Required when `RUSTY_LLM_MODEL` targets an `anthropic/*` model |
+| `openai-api-key` | Required when `RUSTY_LLM_MODEL` targets an `openai/*` model |
+| `google-api-key` | Required when `RUSTY_LLM_MODEL` targets a `google/*` model |
+| `azure-openai-api-key` | Required when `RUSTY_LLM_MODEL` targets an `azure-openai/*` model |
+| `llm-api-key` | API key for an OpenAI-compatible endpoint (set together with `RUSTY_LLM_BASE_URL`, e.g. LiteLLM, Requesty, vLLM) |
+| `jira-api-token` | Enable Jira ticket compliance (combine with `RUSTY_JIRA_BASE_URL` + `RUSTY_JIRA_EMAIL` env) |
+| `linear-api-key` | Enable Linear ticket compliance |
 
 Everything else — `RUSTY_REVIEW_STYLE`, `RUSTY_FOCUS_AREAS`, `RUSTY_LLM_MODEL`, `RUSTY_JUDGE_*`, `RUSTY_LLM_TRIAGE_MODEL`, temperatures, `RUSTY_OPENGREP_RULES`, `RUSTY_REVIEW_DRAFTS`, etc. — is set per-step via `env:`. See the env-var table below for the full list.
 
@@ -241,17 +241,17 @@ The CLI reuses the same review engine, prompts, triage, MCP wiring, convention-f
 
 **Flags:**
 
-| Flag                 | Description                                                                | Default    |
-| -------------------- | -------------------------------------------------------------------------- | ---------- |
-| `--repo <path>`      | path to the git repo                                                       | cwd        |
-| `--base <ref>`       | base ref to diff against                                                   | `main`     |
-| `--head <ref>`       | head ref to review                                                         | `HEAD`     |
-| `--style <style>`    | `strict` \| `balanced` \| `lenient` \| `roast` \| `thorough`               | `balanced` |
-| `--focus <list>`     | comma-separated focus areas (`security,performance,bugs,style,tests,docs`) | all        |
-| `--ignore <list>`    | comma-separated glob patterns to skip                                      | —          |
-| `--format <fmt>`     | `markdown` or `json`                                                       | `markdown` |
-| `--fail-on-critical` | exit non-zero when any critical finding is present                         | off        |
-| `-h`, `--help`       | show help text                                                             | —          |
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--repo <path>` | path to the git repo | cwd |
+| `--base <ref>` | base ref to diff against | `main` |
+| `--head <ref>` | head ref to review | `HEAD` |
+| `--style <style>` | `strict` \| `balanced` \| `lenient` \| `roast` \| `thorough` | `balanced` |
+| `--focus <list>` | comma-separated focus areas (`security,performance,bugs,style,tests,docs`) | all |
+| `--ignore <list>` | comma-separated glob patterns to skip | — |
+| `--format <fmt>` | `markdown` or `json` | `markdown` |
+| `--fail-on-critical` | exit non-zero when any critical finding is present | off |
+| `-h`, `--help` | show help text | — |
 
 **Environment:**
 
@@ -263,87 +263,86 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 
 ### Environment Variables
 
-| Variable                             | Description                                                                                                                                                                                                                                                                                                                                                                                                                                            | Default                                 |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------- |
-| `RUSTY_LLM_MODEL`                    | LLM model in `provider/model` format. `openrouter/*` and `azure-openai/*` models accept an optional `:<effort>` suffix, see [Reasoning effort](#reasoning-effort)                                                                                                                                                                                                                                                                                      | `anthropic/claude-sonnet-4-20250514`    |
-| `OPENAI_API_KEY`                     | OpenAI API key                                                                                                                                                                                                                                                                                                                                                                                                                                         | —                                       |
-| `ANTHROPIC_API_KEY`                  | Anthropic API key                                                                                                                                                                                                                                                                                                                                                                                                                                      | —                                       |
-| `GOOGLE_GENERATIVE_AI_API_KEY`       | Google AI API key                                                                                                                                                                                                                                                                                                                                                                                                                                      | —                                       |
-| `RUSTY_DB_URL`                       | libSQL database URL                                                                                                                                                                                                                                                                                                                                                                                                                                    | `file:./rusty.db`                       |
-| `GITHUB_APP_ID`                      | GitHub App ID                                                                                                                                                                                                                                                                                                                                                                                                                                          | —                                       |
-| `GITHUB_PRIVATE_KEY_PATH`            | path to GitHub App private key PEM                                                                                                                                                                                                                                                                                                                                                                                                                     | —                                       |
-| `GITHUB_PRIVATE_KEY`                 | inline PEM (alternative to path)                                                                                                                                                                                                                                                                                                                                                                                                                       | —                                       |
-| `GITHUB_WEBHOOK_SECRET`              | GitHub webhook secret                                                                                                                                                                                                                                                                                                                                                                                                                                  | —                                       |
-| `RUSTY_REVIEW_STYLE`                 | default review style                                                                                                                                                                                                                                                                                                                                                                                                                                   | `balanced`                              |
-| `RUSTY_FOCUS_AREAS`                  | comma-separated focus areas                                                                                                                                                                                                                                                                                                                                                                                                                            | all enabled                             |
-| `RUSTY_IGNORE_PATTERNS`              | comma-separated glob patterns to skip                                                                                                                                                                                                                                                                                                                                                                                                                  | —                                       |
-| `RUSTY_FAIL_ON_CRITICAL`             | exit 1 on critical findings (pipeline/action mode)                                                                                                                                                                                                                                                                                                                                                                                                     | `true`                                  |
-| `RUSTY_REVIEW_DRAFTS`                | review draft PRs in GitHub Action mode                                                                                                                                                                                                                                                                                                                                                                                                                 | `false`                                 |
-| `RUSTY_INCREMENTAL_REVIEW`           | review only the diff since the last reviewed commit (GitHub, GitLab) or PR iteration (Azure DevOps); previous summary + findings are carried forward as context                                                                                                                                                                                                                                                                                        | `true`                                  |
-| `RUSTY_LLM_HEADERS_TIMEOUT_MS`       | undici headers timeout for outbound `fetch` (LLM router + provider APIs) — raised above the 300s default to accommodate slow upstream models on large prompts                                                                                                                                                                                                                                                                                          | `600000`                                |
-| `RUSTY_LLM_BODY_TIMEOUT_MS`          | undici body timeout for outbound `fetch`; resets per chunk so generations longer than this still complete as long as chunks keep arriving                                                                                                                                                                                                                                                                                                              | `600000`                                |
-| `RUSTY_OLLAMA_BASE_URL`              | base URL for the `ollama/*` provider — set to `https://ollama.com` for [Ollama Cloud](https://ollama.com), or a remote host for self-hosted Ollama                                                                                                                                                                                                                                                                                                     | `http://127.0.0.1:11434`                |
-| `RUSTY_OLLAMA_API_KEY`               | bearer token for the `ollama/*` provider (required for Ollama Cloud, ignored for unauthenticated local instances); falls back to `OLLAMA_API_KEY`                                                                                                                                                                                                                                                                                                      | —                                       |
-| `RUSTY_LOG_AGENT_STEPS`              | when `true`, log a line per agent step (`stepNumber`, `finishReason`, `toolCallCount`, token usage); diagnostic for slow / tool-looping passes                                                                                                                                                                                                                                                                                                         | `false`                                 |
-| `RUSTY_LOG_RAW_FINDINGS`             | when `true`, log each consensus pass's findings before clustering (file/line/severity/category/message); diagnostic for tuning Jaccard / line-proximity thresholds                                                                                                                                                                                                                                                                                     | `false`                                 |
-| `RUSTY_LOG_RAW_FINDINGS_FILE`        | with `RUSTY_LOG_RAW_FINDINGS=true`, also append the per-pass and cluster records (with each cluster's variants) to this path as NDJSON, regardless of `LOG_LEVEL`; write failures only warn                                                                                                                                                                                                                                                            | —                                       |
-| `RUSTY_CONSENSUS_PASSES`             | consensus pass count when the repo config does not set `consensusPasses` (integer 1-5; anything else warns and uses the default)                                                                                                                                                                                                                                                                                                                       | `3`                                     |
-| `RUSTY_CONSENSUS_THRESHOLD`          | votes needed for a finding to survive when the repo config does not set `consensusThreshold` (integer >= 1, clamped to the pass count)                                                                                                                                                                                                                                                                                                                 | majority                                |
-| `RUSTY_CLUSTER_LINE_WINDOW`          | max line distance for findings to join one cluster                                                                                                                                                                                                                                                                                                                                                                                                     | `5`                                     |
-| `RUSTY_CLUSTER_JACCARD`              | message Jaccard similarity needed to cluster findings of different categories (0-1; values outside use the default)                                                                                                                                                                                                                                                                                                                                    | `0.3`                                   |
-| `RUSTY_CLUSTER_CATEGORY_JACCARD`     | message Jaccard similarity needed to cluster findings of the same category (0-1; values outside use the default)                                                                                                                                                                                                                                                                                                                                       | `0.2`                                   |
-| `RUSTY_LOG_JUDGE_SCORES`             | when `true`, log every judge evaluation (not just rejections) at info level — file/line/severity/category/confidence/accepted/defaulted/reasoning; diagnostic for calibrating `RUSTY_JUDGE_THRESHOLD`                                                                                                                                                                                                                                                  | `false`                                 |
-| `RUSTY_JIRA_BASE_URL`                | Jira instance URL                                                                                                                                                                                                                                                                                                                                                                                                                                      | —                                       |
-| `RUSTY_JIRA_EMAIL`                   | Jira auth email                                                                                                                                                                                                                                                                                                                                                                                                                                        | —                                       |
-| `RUSTY_JIRA_API_TOKEN`               | Jira API token                                                                                                                                                                                                                                                                                                                                                                                                                                         | —                                       |
-| `RUSTY_LINEAR_API_KEY`               | Linear API key                                                                                                                                                                                                                                                                                                                                                                                                                                         | —                                       |
-| `RUSTY_ADO_PAT`                      | Azure DevOps PAT (server mode)                                                                                                                                                                                                                                                                                                                                                                                                                         | —                                       |
-| `RUSTY_GITLAB_TOKEN`                 | GitLab project/personal access token (`api` scope) used by the GitLab CI job                                                                                                                                                                                                                                                                                                                                                                           | falls back to `CI_JOB_TOKEN`            |
-| `RUSTY_GITLAB_API_URL`               | GitLab API v4 base URL (override for self-hosted; defaults to `CI_API_V4_URL`)                                                                                                                                                                                                                                                                                                                                                                         | —                                       |
-| `RUSTY_GITLAB_PROJECT_PATH`          | Override `CI_PROJECT_PATH` when invoking the GitLab CLI outside of GitLab CI                                                                                                                                                                                                                                                                                                                                                                           | —                                       |
-| `RUSTY_GITLAB_MR_IID`                | Override `CI_MERGE_REQUEST_IID` when invoking the GitLab CLI outside of GitLab CI                                                                                                                                                                                                                                                                                                                                                                      | —                                       |
-| `AZURE_OPENAI_API_KEY`               | Azure OpenAI API key (or `AZURE_API_KEY`)                                                                                                                                                                                                                                                                                                                                                                                                              | —                                       |
-| `AZURE_OPENAI_RESOURCE_NAME`         | Azure OpenAI resource name                                                                                                                                                                                                                                                                                                                                                                                                                             | —                                       |
-| `RUSTY_AZURE_RESOURCE_NAME`          | Azure OpenAI resource (managed identity mode)                                                                                                                                                                                                                                                                                                                                                                                                          | —                                       |
-| `RUSTY_AZURE_DEPLOYMENT`             | Azure OpenAI deployment (managed identity mode)                                                                                                                                                                                                                                                                                                                                                                                                        | —                                       |
-| `RUSTY_AZURE_FOUNDRY_RESOURCE_NAME`  | Azure AI Foundry resource for non-OpenAI models (managed identity mode)                                                                                                                                                                                                                                                                                                                                                                                | —                                       |
-| `RUSTY_AZURE_FOUNDRY_DEPLOYMENT`     | Azure AI Foundry deployment for non-OpenAI models (managed identity mode)                                                                                                                                                                                                                                                                                                                                                                              | —                                       |
-| `RUSTY_AZURE_ANTHROPIC_BASE_URL`     | Azure AI Foundry Anthropic endpoint (e.g. `https://<resource>.services.ai.azure.com/anthropic/v1`)                                                                                                                                                                                                                                                                                                                                                     | —                                       |
-| `RUSTY_AZURE_ANTHROPIC_API_KEY`      | Foundry API key for the Anthropic deployment (or `AZURE_ANTHROPIC_API_KEY`)                                                                                                                                                                                                                                                                                                                                                                            | —                                       |
-| `RUSTY_AZURE_ANTHROPIC_DEPLOYMENT`   | Foundry deployment name (managed identity / Entra ID mode)                                                                                                                                                                                                                                                                                                                                                                                             | —                                       |
-| `RUSTY_LLM_BASE_URL`                 | OpenAI-compatible endpoint URL (e.g. LiteLLM)                                                                                                                                                                                                                                                                                                                                                                                                          | —                                       |
-| `RUSTY_LLM_API_KEY`                  | API key for custom endpoint                                                                                                                                                                                                                                                                                                                                                                                                                            | —                                       |
-| `RUSTY_JUDGE_ENABLED`                | enable post-generation judge/filter pass                                                                                                                                                                                                                                                                                                                                                                                                               | `false`                                 |
-| `RUSTY_JUDGE_THRESHOLD`              | minimum confidence score (0–10) to keep a finding                                                                                                                                                                                                                                                                                                                                                                                                      | `6`                                     |
-| `RUSTY_JUDGE_MODEL`                  | model for the judge (can be cheaper than reviewer)                                                                                                                                                                                                                                                                                                                                                                                                     | same as `RUSTY_LLM_MODEL`               |
-| `RUSTY_LLM_TRIAGE_MODEL`             | LLM model for triage classification (enables cascading)                                                                                                                                                                                                                                                                                                                                                                                                | —                                       |
-| `RUSTY_CASCADE_ENABLED`              | explicitly enable/disable cascading (`true`/`false`)                                                                                                                                                                                                                                                                                                                                                                                                   | auto (enabled when triage model is set) |
-| `RUSTY_OPENGREP_RULES`               | OpenGrep config string (ruleset or path to rule file)                                                                                                                                                                                                                                                                                                                                                                                                  | `auto`                                  |
-| `RUSTY_GENERATE_DESCRIPTION`         | generate PR description when empty/placeholder                                                                                                                                                                                                                                                                                                                                                                                                         | `false`                                 |
-| `RUSTY_RENAME_TITLE_TO_CONVENTIONAL` | rewrite non-conventional PR titles into Conventional Commits format                                                                                                                                                                                                                                                                                                                                                                                    | `false`                                 |
-| `RUSTY_FLAG_SCOPE_CREEP`             | list changes that fall outside the PR's stated intent in a "Scope Creep" section of the summary comment                                                                                                                                                                                                                                                                                                                                                | `false`                                 |
-| `RUSTY_LLM_MAX_RETRIES`              | application-level retries on transient LLM errors (max 2)                                                                                                                                                                                                                                                                                                                                                                                              | `2`                                     |
-| `RUSTY_LLM_MAX_STEPS`                | cap on multi-step tool-using trajectories per review pass. The final allowed step is forced to `toolChoice: "none"` so the model has to emit text (and therefore structured output), which avoids tool-happy models — Anthropic in particular — terminating with `finishReason: "tool-calls"` and zero text. Unset, empty or invalid = 20. The cap is the only bound on the tool loop, so there is always one.                                         | `20`                                    |
-| `RUSTY_REVIEW_PASS_TIMEOUT_MS`       | wall-clock budget in milliseconds for one review pass, including its retries. A pass that runs out of time is aborted and counts as failed, so consensus continues with the surviving passes. Unset, empty, non-numeric or below `1` = `480000` (8 minutes).                                                                                                                                                                                           | `480000`                                |
-| `RUSTY_REVIEW_DEADLINE_MS`           | optional review-wide budget in milliseconds, measured from the start of the review. Every pass gets at most the time remaining; skim files whose pass hit the deadline are reported as not reviewed instead of being promoted to the deep tier. Unset or invalid = no deadline.                                                                                                                                                                        | unset                                   |
-| `RUSTY_LLM_STRUCTURING_MODEL`        | model id for a separate structuring pass (e.g. `azure-openai/gpt-5.4-mini`). When set, the review model writes freeform prose with tools available and no schema pressure, and a cheap structuring model translates the prose into the required JSON. Eliminates the entire class of "model terminates with tool-calls and zero text" failures since the review model is no longer on the schema-output path. Adds one cheap LLM call per review pass. | —                                       |
-| `RUSTY_LLM_JSON_PROMPT_INJECTION`    | comma-separated model IDs (or `prefix*` wildcards) to force-on prompt-injected JSON output, overriding the auto-detected default                                                                                                                                                                                                                                                                                                                       | —                                       |
-| `RUSTY_LLM_NATIVE_STRUCTURED_OUTPUT` | comma-separated model IDs (or `prefix*` wildcards) to force-on native `json_schema` structured output, overriding the auto-detected default                                                                                                                                                                                                                                                                                                            | —                                       |
-| `RUSTY_LLM_DISABLE_THINKING`         | comma-separated `azure-foundry/<deployment>` IDs (or `prefix*` wildcards) to send `thinking: { type: "disabled" }` on chat-completions requests. Useful for Moonshot Kimi K2 deployments whose thinking trace eats the output budget and causes JSON truncation. Only takes effect on `azure-foundry/*` configs.                                                                                                                                       | —                                       |
-| `RUSTY_LLM_TEMPERATURE`              | global LLM temperature                                                                                                                                                                                                                                                                                                                                                                                                                                 | provider default                        |
-| `RUSTY_LLM_TOP_P`                    | global LLM top-p                                                                                                                                                                                                                                                                                                                                                                                                                                       | provider default                        |
-| `RUSTY_REVIEW_TEMPERATURE`           | temperature override for the review agent                                                                                                                                                                                                                                                                                                                                                                                                              | `RUSTY_LLM_TEMPERATURE`                 |
-| `RUSTY_TRIAGE_TEMPERATURE`           | temperature override for the triage agent                                                                                                                                                                                                                                                                                                                                                                                                              | `RUSTY_LLM_TEMPERATURE`                 |
-| `RUSTY_JUDGE_TEMPERATURE`            | temperature override for the judge agent                                                                                                                                                                                                                                                                                                                                                                                                               | `RUSTY_LLM_TEMPERATURE`                 |
-| `RUSTY_DESCRIPTION_TEMPERATURE`      | temperature override for the description agent                                                                                                                                                                                                                                                                                                                                                                                                         | `RUSTY_LLM_TEMPERATURE`                 |
-| `RUSTY_TITLE_TEMPERATURE`            | temperature override for the title-rename agent                                                                                                                                                                                                                                                                                                                                                                                                        | `RUSTY_LLM_TEMPERATURE`                 |
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `RUSTY_LLM_MODEL` | LLM model in `provider/model` format. `openrouter/*` and `azure-openai/*` models accept an optional `:<effort>` suffix, see [Reasoning effort](#reasoning-effort) | `anthropic/claude-sonnet-4-20250514` |
+| `OPENAI_API_KEY` | OpenAI API key | — |
+| `ANTHROPIC_API_KEY` | Anthropic API key | — |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Google AI API key | — |
+| `RUSTY_DB_URL` | libSQL database URL | `file:./rusty.db` |
+| `GITHUB_APP_ID` | GitHub App ID | — |
+| `GITHUB_PRIVATE_KEY_PATH` | path to GitHub App private key PEM | — |
+| `GITHUB_PRIVATE_KEY` | inline PEM (alternative to path) | — |
+| `GITHUB_WEBHOOK_SECRET` | GitHub webhook secret | — |
+| `RUSTY_REVIEW_STYLE` | default review style | `balanced` |
+| `RUSTY_FOCUS_AREAS` | comma-separated focus areas | all enabled |
+| `RUSTY_IGNORE_PATTERNS` | comma-separated glob patterns to skip | — |
+| `RUSTY_FAIL_ON_CRITICAL` | exit 1 on critical findings (pipeline/action mode) | `true` |
+| `RUSTY_REVIEW_DRAFTS` | review draft PRs in GitHub Action mode | `false` |
+| `RUSTY_INCREMENTAL_REVIEW` | review only the diff since the last reviewed commit (GitHub, GitLab) or PR iteration (Azure DevOps); previous summary + findings are carried forward as context | `true` |
+| `RUSTY_LLM_HEADERS_TIMEOUT_MS` | undici headers timeout for outbound `fetch` (LLM router + provider APIs) — raised above the 300s default to accommodate slow upstream models on large prompts | `600000` |
+| `RUSTY_LLM_BODY_TIMEOUT_MS` | undici body timeout for outbound `fetch`; resets per chunk so generations longer than this still complete as long as chunks keep arriving | `600000` |
+| `RUSTY_OLLAMA_BASE_URL` | base URL for the `ollama/*` provider — set to `https://ollama.com` for [Ollama Cloud](https://ollama.com), or a remote host for self-hosted Ollama | `http://127.0.0.1:11434` |
+| `RUSTY_OLLAMA_API_KEY` | bearer token for the `ollama/*` provider (required for Ollama Cloud, ignored for unauthenticated local instances); falls back to `OLLAMA_API_KEY` | — |
+| `RUSTY_LOG_AGENT_STEPS` | when `true`, log a line per agent step (`stepNumber`, `finishReason`, `toolCallCount`, token usage); diagnostic for slow / tool-looping passes | `false` |
+| `RUSTY_LOG_RAW_FINDINGS` | when `true`, log each consensus pass's findings before clustering (file/line/severity/category/message); diagnostic for tuning Jaccard / line-proximity thresholds | `false` |
+| `RUSTY_LOG_RAW_FINDINGS_FILE` | with `RUSTY_LOG_RAW_FINDINGS=true`, also append the per-pass and cluster records (with each cluster's variants) to this path as NDJSON, regardless of `LOG_LEVEL`; write failures only warn | — |
+| `RUSTY_CONSENSUS_PASSES` | consensus pass count when the repo config does not set `consensusPasses` (integer 1-5; anything else warns and uses the default) | `3` |
+| `RUSTY_CONSENSUS_THRESHOLD` | votes needed for a finding to survive when the repo config does not set `consensusThreshold` (integer >= 1, clamped to the pass count) | majority |
+| `RUSTY_CLUSTER_LINE_WINDOW` | max line distance for findings to join one cluster | `5` |
+| `RUSTY_CLUSTER_JACCARD` | message Jaccard similarity needed to cluster findings of different categories (0-1; values outside use the default) | `0.3` |
+| `RUSTY_CLUSTER_CATEGORY_JACCARD` | message Jaccard similarity needed to cluster findings of the same category (0-1; values outside use the default) | `0.2` |
+| `RUSTY_LOG_JUDGE_SCORES` | when `true`, log every judge evaluation (not just rejections) at info level — file/line/severity/category/confidence/accepted/defaulted/reasoning; diagnostic for calibrating `RUSTY_JUDGE_THRESHOLD` | `false` |
+| `RUSTY_JIRA_BASE_URL` | Jira instance URL | — |
+| `RUSTY_JIRA_EMAIL` | Jira auth email | — |
+| `RUSTY_JIRA_API_TOKEN` | Jira API token | — |
+| `RUSTY_LINEAR_API_KEY` | Linear API key | — |
+| `RUSTY_ADO_PAT` | Azure DevOps PAT (server mode) | — |
+| `RUSTY_GITLAB_TOKEN` | GitLab project/personal access token (`api` scope) used by the GitLab CI job | falls back to `CI_JOB_TOKEN` |
+| `RUSTY_GITLAB_API_URL` | GitLab API v4 base URL (override for self-hosted; defaults to `CI_API_V4_URL`) | — |
+| `RUSTY_GITLAB_PROJECT_PATH` | Override `CI_PROJECT_PATH` when invoking the GitLab CLI outside of GitLab CI | — |
+| `RUSTY_GITLAB_MR_IID` | Override `CI_MERGE_REQUEST_IID` when invoking the GitLab CLI outside of GitLab CI | — |
+| `AZURE_OPENAI_API_KEY` | Azure OpenAI API key (or `AZURE_API_KEY`) | — |
+| `AZURE_OPENAI_RESOURCE_NAME` | Azure OpenAI resource name | — |
+| `RUSTY_AZURE_RESOURCE_NAME` | Azure OpenAI resource (managed identity mode) | — |
+| `RUSTY_AZURE_DEPLOYMENT` | Azure OpenAI deployment (managed identity mode) | — |
+| `RUSTY_AZURE_FOUNDRY_RESOURCE_NAME` | Azure AI Foundry resource for non-OpenAI models (managed identity mode) | — |
+| `RUSTY_AZURE_FOUNDRY_DEPLOYMENT` | Azure AI Foundry deployment for non-OpenAI models (managed identity mode) | — |
+| `RUSTY_AZURE_ANTHROPIC_BASE_URL` | Azure AI Foundry Anthropic endpoint (e.g. `https://<resource>.services.ai.azure.com/anthropic/v1`) | — |
+| `RUSTY_AZURE_ANTHROPIC_API_KEY` | Foundry API key for the Anthropic deployment (or `AZURE_ANTHROPIC_API_KEY`) | — |
+| `RUSTY_AZURE_ANTHROPIC_DEPLOYMENT` | Foundry deployment name (managed identity / Entra ID mode) | — |
+| `RUSTY_LLM_BASE_URL` | OpenAI-compatible endpoint URL (e.g. LiteLLM) | — |
+| `RUSTY_LLM_API_KEY` | API key for custom endpoint | — |
+| `RUSTY_JUDGE_ENABLED` | enable post-generation judge/filter pass | `false` |
+| `RUSTY_JUDGE_THRESHOLD` | minimum confidence score (0–10) to keep a finding | `6` |
+| `RUSTY_JUDGE_MODEL` | model for the judge (can be cheaper than reviewer) | same as `RUSTY_LLM_MODEL` |
+| `RUSTY_LLM_TRIAGE_MODEL` | LLM model for triage classification (enables cascading) | — |
+| `RUSTY_CASCADE_ENABLED` | explicitly enable/disable cascading (`true`/`false`) | auto (enabled when triage model is set) |
+| `RUSTY_OPENGREP_RULES` | OpenGrep config string (ruleset or path to rule file) | `auto` |
+| `RUSTY_GENERATE_DESCRIPTION` | generate PR description when empty/placeholder | `false` |
+| `RUSTY_RENAME_TITLE_TO_CONVENTIONAL` | rewrite non-conventional PR titles into Conventional Commits format | `false` |
+| `RUSTY_FLAG_SCOPE_CREEP` | list changes that fall outside the PR's stated intent in a "Scope Creep" section of the summary comment | `false` |
+| `RUSTY_LLM_MAX_RETRIES` | application-level retries on transient LLM errors (max 2) | `2` |
+| `RUSTY_LLM_MAX_STEPS` | cap on multi-step tool-using trajectories per review pass. The final allowed step is forced to `toolChoice: "none"` so the model has to emit text (and therefore structured output), which avoids tool-happy models — Anthropic in particular — terminating with `finishReason: "tool-calls"` and zero text. Unset, empty or invalid = 20. The cap is the only bound on the tool loop, so there is always one. | `20` |
+| `RUSTY_REVIEW_PASS_TIMEOUT_MS` | wall-clock budget in milliseconds for one review pass, including its retries. A pass that runs out of time is aborted and counts as failed, so consensus continues with the surviving passes. Unset, empty, non-numeric or below `1` = `480000` (8 minutes). | `480000` |
+| `RUSTY_REVIEW_DEADLINE_MS` | optional review-wide budget in milliseconds, measured from the start of the review. Every pass gets at most the time remaining; skim files whose pass hit the deadline are reported as not reviewed instead of being promoted to the deep tier. Unset or invalid = no deadline. | unset |
+| `RUSTY_LLM_STRUCTURING_MODEL` | model id for a separate structuring pass (e.g. `azure-openai/gpt-5.4-mini`). When set, the review model writes freeform prose with tools available and no schema pressure, and a cheap structuring model translates the prose into the required JSON. Eliminates the entire class of "model terminates with tool-calls and zero text" failures since the review model is no longer on the schema-output path. Adds one cheap LLM call per review pass. | — |
+| `RUSTY_LLM_JSON_PROMPT_INJECTION` | comma-separated model IDs (or `prefix*` wildcards) to force-on prompt-injected JSON output, overriding the auto-detected default | — |
+| `RUSTY_LLM_NATIVE_STRUCTURED_OUTPUT` | comma-separated model IDs (or `prefix*` wildcards) to force-on native `json_schema` structured output, overriding the auto-detected default | — |
+| `RUSTY_LLM_DISABLE_THINKING` | comma-separated `azure-foundry/<deployment>` IDs (or `prefix*` wildcards) to send `thinking: { type: "disabled" }` on chat-completions requests. Useful for Moonshot Kimi K2 deployments whose thinking trace eats the output budget and causes JSON truncation. Only takes effect on `azure-foundry/*` configs. | — |
+| `RUSTY_LLM_TEMPERATURE` | global LLM temperature | provider default |
+| `RUSTY_LLM_TOP_P` | global LLM top-p | provider default |
+| `RUSTY_REVIEW_TEMPERATURE` | temperature override for the review agent | `RUSTY_LLM_TEMPERATURE` |
+| `RUSTY_TRIAGE_TEMPERATURE` | temperature override for the triage agent | `RUSTY_LLM_TEMPERATURE` |
+| `RUSTY_JUDGE_TEMPERATURE` | temperature override for the judge agent | `RUSTY_LLM_TEMPERATURE` |
+| `RUSTY_DESCRIPTION_TEMPERATURE` | temperature override for the description agent | `RUSTY_LLM_TEMPERATURE` |
+| `RUSTY_TITLE_TEMPERATURE` | temperature override for the title-rename agent | `RUSTY_LLM_TEMPERATURE` |
 
 ### LLM Provider Configuration
 
 Rusty Bot supports eight ways to connect to an LLM, resolved in this order:
 
 **1. Azure OpenAI with API key** — for Azure AI Foundry GPT deployments:
-
 ```bash
 RUSTY_LLM_MODEL=azure-openai/gpt-5.3-codex
 AZURE_OPENAI_API_KEY=your-key
@@ -353,7 +352,6 @@ AZURE_OPENAI_RESOURCE_NAME=ai-code-review-foundry
 The resource name is the subdomain from your endpoint URL (e.g. `https://ai-code-review-foundry.cognitiveservices.azure.com` → `ai-code-review-foundry`). Uses `@ai-sdk/azure` directly with the Responses API (`/v1/responses`).
 
 **2. Azure OpenAI with Managed Identity** — no API keys needed when running on Azure:
-
 ```bash
 RUSTY_AZURE_RESOURCE_NAME=my-openai-resource
 RUSTY_AZURE_DEPLOYMENT=gpt-4o
@@ -362,7 +360,6 @@ RUSTY_AZURE_DEPLOYMENT=gpt-4o
 Uses `DefaultAzureCredential` from `@azure/identity`, which automatically picks up managed identity in Azure VMs, AKS, App Service, Azure Functions, and Azure Pipelines. Also works with `az login` locally.
 
 **3. Non-OpenAI models on Azure AI Foundry with API key** — Kimi, Llama, Mistral, etc. served from the Foundry endpoint but only reachable via Chat Completions:
-
 ```bash
 RUSTY_LLM_MODEL=azure-foundry/Kimi-K2.6
 AZURE_OPENAI_API_KEY=your-key
@@ -372,7 +369,6 @@ AZURE_OPENAI_RESOURCE_NAME=ai-code-review-foundry
 Identical config to `azure-openai/`, but routes through `/v1/chat/completions` instead of `/v1/responses` because non-OpenAI Foundry models don't support the Responses API. Use this prefix whenever the deployment isn't a first-party OpenAI model.
 
 **4. Non-OpenAI models on Azure AI Foundry with Managed Identity**:
-
 ```bash
 RUSTY_AZURE_FOUNDRY_RESOURCE_NAME=ai-code-review-foundry
 RUSTY_AZURE_FOUNDRY_DEPLOYMENT=Kimi-K2.6
@@ -381,7 +377,6 @@ RUSTY_AZURE_FOUNDRY_DEPLOYMENT=Kimi-K2.6
 Same `DefaultAzureCredential` path as the OpenAI MI mode, but kept on separate env vars so the two can coexist on the same machine.
 
 **5. Anthropic on Azure AI Foundry with API key** — for Claude deployments served from Foundry's Models-as-a-Service:
-
 ```bash
 RUSTY_LLM_MODEL=azure-anthropic/claude-sonnet-4-5
 RUSTY_AZURE_ANTHROPIC_BASE_URL=https://my-foundry.services.ai.azure.com/anthropic/v1
@@ -391,7 +386,6 @@ RUSTY_AZURE_ANTHROPIC_API_KEY=your-foundry-key
 The deployment after `azure-anthropic/` must match the deployment name in Foundry. The base URL is the resource's Anthropic endpoint up to and including `/v1` — `@ai-sdk/anthropic` appends `/messages` itself. Uses `@ai-sdk/anthropic` with a custom `baseURL`, so Anthropic features like prompt caching and tool use work unchanged.
 
 **6. Anthropic on Azure AI Foundry with Entra ID** — managed identity / `az login`, no API key:
-
 ```bash
 RUSTY_AZURE_ANTHROPIC_BASE_URL=https://my-foundry.services.ai.azure.com/anthropic/v1
 RUSTY_AZURE_ANTHROPIC_DEPLOYMENT=claude-sonnet-4-5
@@ -400,7 +394,6 @@ RUSTY_AZURE_ANTHROPIC_DEPLOYMENT=claude-sonnet-4-5
 Uses `DefaultAzureCredential` to fetch a fresh token (scope `https://cognitiveservices.azure.com/.default`) for every request, just like the Azure OpenAI managed identity path.
 
 **7. OpenAI-compatible endpoint** — for LiteLLM, vLLM, or any proxy:
-
 ```bash
 RUSTY_LLM_BASE_URL=http://localhost:4000/v1
 RUSTY_LLM_MODEL=gpt-4o
@@ -408,7 +401,6 @@ RUSTY_LLM_API_KEY=optional-key
 ```
 
 **8. Ollama (local or [Ollama Cloud](https://ollama.com))** — uses the native [`ai-sdk-ollama`](https://www.npmjs.com/package/ai-sdk-ollama) provider, so it supports tool calling and can be mixed per-pass with other providers in `RUSTY_REVIEW_MODELS`:
-
 ```bash
 # local Ollama (default)
 RUSTY_LLM_MODEL=ollama/llama3.2
@@ -430,7 +422,6 @@ RUSTY_REVIEW_MODELS=anthropic/claude-sonnet-4-5,ollama/gpt-oss:120b,requesty/goo
 Structured output: by default Ollama uses prompt-injected JSON via the structuring model (set `RUSTY_LLM_STRUCTURING_MODEL` to a known-good model like `requesty/google/gemini-3.1-flash-lite-preview`). Opt into native JSON schema for specific models with `RUSTY_LLM_NATIVE_STRUCTURED_OUTPUT=ollama/gpt-oss*`.
 
 **9. Direct provider API keys (default)**:
-
 ```bash
 RUSTY_LLM_MODEL=anthropic/claude-sonnet-4-20250514
 ANTHROPIC_API_KEY=sk-ant-...
@@ -438,13 +429,13 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 Supported prefixes and the key each one reads:
 
-| Prefix        | Example                                | API key                        |
-| ------------- | -------------------------------------- | ------------------------------ |
-| `anthropic/`  | `anthropic/claude-sonnet-4-5`          | `ANTHROPIC_API_KEY`            |
-| `openai/`     | `openai/gpt-5-mini`                    | `OPENAI_API_KEY`               |
-| `google/`     | `google/gemini-3.1-pro`                | `GOOGLE_GENERATIVE_AI_API_KEY` |
-| `openrouter/` | `openrouter/x-ai/grok-4.3`             | `OPENROUTER_API_KEY`           |
-| `requesty/`   | `requesty/anthropic/claude-sonnet-4-6` | `REQUESTY_API_KEY`             |
+| Prefix | Example | API key |
+|---|---|---|
+| `anthropic/` | `anthropic/claude-sonnet-4-5` | `ANTHROPIC_API_KEY` |
+| `openai/` | `openai/gpt-5-mini` | `OPENAI_API_KEY` |
+| `google/` | `google/gemini-3.1-pro` | `GOOGLE_GENERATIVE_AI_API_KEY` |
+| `openrouter/` | `openrouter/x-ai/grok-4.3` | `OPENROUTER_API_KEY` |
+| `requesty/` | `requesty/anthropic/claude-sonnet-4-6` | `REQUESTY_API_KEY` |
 
 Any other prefix fails at startup with a config error that lists the supported ones. A missing key fails the same way and names the env var.
 
@@ -475,7 +466,6 @@ RUSTY_REVIEW_MODELS=openrouter/x-ai/grok-4.3,openrouter/moonshotai/kimi-k2.6,ope
 You can mix gateways in one ensemble — `requesty/...`, `openrouter/...`, `ollama/...`, and direct provider ids all resolve per-pass through their own routes.
 
 Caveats:
-
 - **Native structured output is off by default for OpenRouter.** `supportsNativeStructuredOutput` doesn't include `openrouter/` in its allow-list because OpenRouter's proxying of `response_format: json_schema` varies by underlying model. Route through the structuring model (`RUSTY_LLM_STRUCTURING_MODEL`) instead, or opt in per-pattern with `RUSTY_LLM_NATIVE_STRUCTURED_OUTPUT=openrouter/anthropic/*` if you've verified the upstream honors it.
 - **OpenRouter's load balancer picks an inference backend per request**, so the same `openrouter/deepseek/deepseek-v4-pro` request can land on Fireworks, DeepSeek's own API, Together, etc. — bringing the same provider-routing-matters lesson with it. Pin a specific backend with the `:nitro` suffix (fastest available) or the OpenRouter-native `provider` parameter if you need determinism.
 - **No bot-level prompt-cache integration**, the way `requesty/*` gets `auto_cache: true`. OpenRouter has its own caching for some models — handled upstream, no env var to flip on the bot side.
@@ -544,7 +534,7 @@ Some models — Kimi K2.x with thinking enabled, Anthropic models with tools —
 RUSTY_LLM_STRUCTURING_MODEL=azure-openai/gpt-5.4-mini
 ```
 
-When set, the review model runs with tools and writes freeform prose (no schema pressure), then a cheap structuring model translates the prose into the schema-conformant JSON. Tool-loop failures evaporate because the review model is no longer on the schema-output path. `RUSTY_LLM_JSON_PROMPT_INJECTION` / `RUSTY_LLM_NATIVE_STRUCTURED_OUTPUT` are evaluated against the _structuring_ model's capabilities when this is set.
+When set, the review model runs with tools and writes freeform prose (no schema pressure), then a cheap structuring model translates the prose into the schema-conformant JSON. Tool-loop failures evaporate because the review model is no longer on the schema-output path. `RUSTY_LLM_JSON_PROMPT_INJECTION` / `RUSTY_LLM_NATIVE_STRUCTURED_OUTPUT` are evaluated against the *structuring* model's capabilities when this is set.
 
 Costs: one extra LLM call per review pass (small on a cheap model) and ~3–8s of extra latency. Trade-off: small risk of information loss in the prose-to-JSON translation if the structuring model misses a field.
 
@@ -567,11 +557,11 @@ curl -X PUT http://localhost:3000/api/config/repos/owner/repo \
 
 Check in a markdown file to your repo root to provide review instructions:
 
-| File            | Priority |
-| --------------- | -------- |
-| `.rusty-bot.md` | Highest  |
-| `REVIEW-BOT.md` | Medium   |
-| `AGENTS.md`     | Lowest   |
+| File | Priority |
+|------|----------|
+| `.rusty-bot.md` | Highest |
+| `REVIEW-BOT.md` | Medium |
+| `AGENTS.md` | Lowest |
 
 The bot picks up the first file found (winner-takes-all) and injects its content into the system prompt. The file is fetched from the **target branch** so PR authors cannot tamper with review rules.
 
@@ -587,12 +577,12 @@ Example `.rusty-bot.md`:
 
 ### Review Styles
 
-| Style        | Behavior                                                                                                                        |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| **Strict**   | Flags all potential issues, prioritizes quality and security                                                                    |
-| **Balanced** | Focuses on confidence, balances thoroughness with practicality                                                                  |
-| **Lenient**  | Only critical bugs and security issues, encouraging tone                                                                        |
-| **Roast**    | Technically accurate feedback wrapped in sharp, witty commentary                                                                |
+| Style | Behavior |
+|-------|----------|
+| **Strict** | Flags all potential issues, prioritizes quality and security |
+| **Balanced** | Focuses on confidence, balances thoroughness with practicality |
+| **Lenient** | Only critical bugs and security issues, encouraging tone |
+| **Roast** | Technically accurate feedback wrapped in sharp, witty commentary |
 | **Thorough** | Structured reasoning (intent → components → execution paths → invariants → edge cases → blast radius) before producing findings |
 
 ### Judge / Filter Pass
@@ -617,12 +607,12 @@ RUSTY_JUDGE_MODEL=anthropic/claude-3-5-haiku-20241022  # optional, cheaper model
 
 **Tuning the threshold:**
 
-| Threshold | Behavior                                                          |
-| --------- | ----------------------------------------------------------------- |
-| 3–4       | Permissive — only drops clearly hallucinated findings             |
-| 5–6       | Balanced — removes speculative and low-confidence noise           |
-| 7–8       | Strict — only high-confidence, evidence-backed findings survive   |
-| 9–10      | Very strict — likely over-filters, use for low-noise environments |
+| Threshold | Behavior |
+|-----------|----------|
+| 3–4 | Permissive — only drops clearly hallucinated findings |
+| 5–6 | Balanced — removes speculative and low-confidence noise |
+| 7–8 | Strict — only high-confidence, evidence-backed findings survive |
+| 9–10 | Very strict — likely over-filters, use for low-noise environments |
 
 **Cost:** The judge uses a single LLM call with structured output (no tools). Using a cheap model like Haiku adds ~1–3% to total cost. Using the same model as the reviewer adds ~30–50%.
 
@@ -724,27 +714,9 @@ Malformed lines are skipped with a warning count; the command exits non-zero onl
   "model": "anthropic/claude-3-5-haiku-20241022",
   "threshold": 6,
   "evaluations": [
-    {
-      "file": "src/auth.ts",
-      "line": 42,
-      "severity": "critical",
-      "category": "security",
-      "confidence": 9,
-      "accepted": true,
-      "defaulted": false,
-      "reasoning": "...",
-    },
-    {
-      "file": "src/utils.ts",
-      "line": 10,
-      "severity": "warning",
-      "category": "style",
-      "confidence": 3,
-      "accepted": false,
-      "defaulted": false,
-      "reasoning": "...",
-    },
-  ],
+    { "file": "src/auth.ts", "line": 42, "severity": "critical", "category": "security", "confidence": 9, "accepted": true, "defaulted": false, "reasoning": "..." },
+    { "file": "src/utils.ts", "line": 10, "severity": "warning", "category": "style", "confidence": 3, "accepted": false, "defaulted": false, "reasoning": "..." }
+  ]
 }
 ```
 
@@ -803,9 +775,9 @@ Configure via per-repo config:
 }
 ```
 
-| Setting              | Description                                                | Default          |
-| -------------------- | ---------------------------------------------------------- | ---------------- |
-| `consensusPasses`    | Number of independent review passes (1 = disabled)         | `3`              |
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `consensusPasses` | Number of independent review passes (1 = disabled) | `3` |
 | `consensusThreshold` | Minimum votes to keep a finding (`null` = simple majority) | `ceil(passes/2)` |
 
 **How it works:**
@@ -828,15 +800,17 @@ Consensus uses `Promise.allSettled` rather than `Promise.all`, so a single flaky
 
 Set `consensusPasses` to `1` to disable consensus voting and get the original single-pass behavior with zero overhead.
 
+
+
 ### Cascading Review (Triage)
 
 By default every file gets the same deep review treatment. When cascading is enabled, a cheap triage model first classifies each file as `skip`, `skim`, or `deep-review`. Each tier then gets an appropriate level of scrutiny:
 
-| Tier            | What happens                                                                                                                                                                                                                                                  |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **skip**        | File is excluded entirely (lock files, auto-generated code, vendored deps)                                                                                                                                                                                    |
-| **skim**        | Lightweight single-pass review — diff-only context, no tools, reduced output schema (no ticket compliance, no missing-tests list). The system prompt is tier-aware, so a skim pass is never told about tools it doesn't have or fields its schema can't hold. |
-| **deep-review** | Full review pipeline — tree-sitter context expansion, code search tools, consensus voting, ticket compliance                                                                                                                                                  |
+| Tier | What happens |
+|------|-------------|
+| **skip** | File is excluded entirely (lock files, auto-generated code, vendored deps) |
+| **skim** | Lightweight single-pass review — diff-only context, no tools, reduced output schema (no ticket compliance, no missing-tests list). The system prompt is tier-aware, so a skim pass is never told about tools it doesn't have or fields its schema can't hold. |
+| **deep-review** | Full review pipeline — tree-sitter context expansion, code search tools, consensus voting, ticket compliance |
 
 **Tier failures degrade instead of aborting.** A tier runs on a single model (skim always; deep when consensus is off), so a dead upstream there used to take the whole action down. Now:
 
@@ -844,7 +818,7 @@ By default every file gets the same deep review treatment. When cascading is ena
 - If the **deep-review** tier fails, the surviving skim results are still posted and the summary names how many files went unreviewed.
 - If every tier with files fails, the run throws. It never reports "No files required review after triage", which would read as an all-clear.
 
-A response with no text, no tool calls and _no token usage at all_ is treated as a dead upstream rather than a parse failure, so the pass fails immediately instead of paying for a full retry trajectory. The raw provider body is logged once on that path.
+A response with no text, no tool calls and *no token usage at all* is treated as a dead upstream rather than a parse failure, so the pass fails immediately instead of paying for a full retry trajectory. The raw provider body is logged once on that path.
 
 Enable by setting a triage model:
 
@@ -864,7 +838,7 @@ RUSTY_CASCADE_ENABLED=false  # force off even if triage model is set
 1. The triage agent receives a truncated version of each file's diff (≤200 tokens per file, 30k token budget total) and classifies it
 2. Files that overflow the triage budget default to `deep-review`
 3. Files the triage model misses also default to `deep-review`
-4. Safety net: if triage classifies _all_ files as `skip`, the top 20% by additions are force-promoted to `deep-review`
+4. Safety net: if triage classifies *all* files as `skip`, the top 20% by additions are force-promoted to `deep-review`
 5. Skim-tier and deep-tier files are reviewed in parallel via `runCascadeReview`
 6. Results from both tiers are merged, then passed through the judge (if enabled)
 7. If triage fails entirely, the bot falls back to the standard full-review pipeline

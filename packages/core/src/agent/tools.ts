@@ -20,16 +20,28 @@ export function capSearchResults(input: {
   return { results, totalMatches: input.count, shown: results.length };
 }
 
+const APPROXIMATE_CHECKOUT_NOTE =
+  " The checkout is the merge of this PR into its target branch, so line numbers in files " +
+  "the target branch also changed may be offset.";
+
+function approximateNote(cache: ToolCache): string {
+  return cache.scope === "pr-head" && cache.approximate ? APPROXIMATE_CHECKOUT_NOTE : "";
+}
+
 export function createSearchCodeTool(cache: ToolCache) {
+  const source =
+    cache.scope === "pr-head"
+      ? "Results come from this PR's head commit, so code added or renamed in this PR is included."
+      : "Results come from the repository's default branch, so symbols added or renamed in this PR will not be found.";
   return tool({
     description:
       "Search the codebase for references to a symbol, function name, import, or string. " +
       "Use this to verify whether removed or renamed exports are still used elsewhere " +
       `before reporting them as issues. Returns up to ${MAX_SEARCH_RESULTS} matches with ` +
       `snippets truncated to ${MAX_SEARCH_FRAGMENT_CHARS} characters; if totalMatches ` +
-      "exceeds shown, narrow the query to see more. Results come from the repository's " +
-      "default branch, so symbols added or renamed in this PR will not be found. " +
-      "If the output has unavailable: true the search did not run; that is not evidence of absence.",
+      `exceeds shown, narrow the query to see more. ${source}` +
+      approximateNote(cache) +
+      " If the output has unavailable: true the search did not run; that is not evidence of absence.",
     inputSchema: z.object({
       query: z.string().describe("symbol name, function name, or search term to find usages of"),
     }),
@@ -87,12 +99,14 @@ export function capFileContent(input: { content: string | null }) {
 }
 
 export function createGetFileContextTool(cache: ToolCache) {
+  const source = cache.scope === "pr-head" ? "the PR head" : "the PR's source branch";
   return tool({
     description:
-      "Fetch the content of a file from the repository. " +
+      `Fetch the content of a file from ${source}. ` +
       "Use this when you need to see more context around a change than what the diff " +
       `provides. Returns up to ${MAX_FILE_CONTEXT_CHARS} characters; if truncated is ` +
-      "true, narrow your investigation to a more specific path or accept the partial view.",
+      "true, narrow your investigation to a more specific path or accept the partial view." +
+      approximateNote(cache),
     inputSchema: z.object({
       path: z.string().describe("file path relative to repo root"),
     }),

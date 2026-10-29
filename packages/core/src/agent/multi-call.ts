@@ -22,13 +22,13 @@ import type {
 import type { OpenGrepFinding } from "../opengrep/types.js";
 import {
   runReview,
+  createToolCache,
   readReviewDeadlineMs,
   isReviewPassTimeoutError,
   type RunReviewOptions,
   type ReviewTier,
 } from "./review.js";
 import { runConsensusReview } from "./consensus.js";
-import { ToolCache } from "./tool-cache.js";
 import { judgeReviewResult, resolveJudgeConfig } from "./judge.js";
 import { deriveMergedRecommendation } from "./recommendation.js";
 import { resolveReviewPassModelConfigs } from "./model.js";
@@ -50,11 +50,9 @@ function withReviewDeadline(options: RunReviewOptions): RunReviewOptions {
 }
 
 function withSharedToolCache(options: RunReviewOptions): RunReviewOptions {
-  if (!options.provider || options.toolCache) return options;
-  return {
-    ...options,
-    toolCache: new ToolCache(options.provider, options.sourceRef ?? "HEAD"),
-  };
+  if (options.toolCache) return options;
+  const toolCache = createToolCache(options);
+  return toolCache ? { ...options, toolCache } : options;
 }
 
 const TICKET_COMPLIANCE_PRIORITY: Record<TicketComplianceStatus, number> = {
@@ -114,18 +112,18 @@ async function buildRankedContextForPatches(
   options: RunReviewOptions,
   config: GraphContextConfig,
 ): Promise<string | undefined> {
-  if (!config.enabled || patches.length === 0 || !options.provider || !options.sourceRef) {
+  if (!config.enabled || patches.length === 0) return undefined;
+
+  const { checkout, provider, sourceRef } = options;
+  let fetchFile: (path: string) => Promise<string | null>;
+  if (checkout) {
+    fetchFile = (path) => checkout.readFile(path);
+  } else if (provider && sourceRef) {
+    fetchFile = (path) => provider.getFileContent(path, sourceRef);
+  } else {
     return undefined;
   }
-
-  const provider = options.provider;
-  const sourceRef = options.sourceRef;
-  const result = await buildGraphRankedContext(
-    patches,
-    (path) => provider.getFileContent(path, sourceRef),
-    prMetadata,
-    config,
-  );
+  const result = await buildGraphRankedContext(patches, fetchFile, prMetadata, config);
 
   if (!result.renderedContext) return undefined;
 

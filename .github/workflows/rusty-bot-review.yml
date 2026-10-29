@@ -13,7 +13,6 @@ permissions:
   contents: read
   pull-requests: write
   issues: read
-  packages: read
 
 jobs:
   review:
@@ -23,11 +22,43 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Rusty Bot
-        uses: ./
+      # build and run the PR's own code; calling the local action would run
+      # the last published docker image instead (see action.yml)
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm -r build
+
+      # mirrors the Dockerfile; keep OPENGREP_VERSION in sync with it. a failed
+      # download degrades to a review without sast
+      - name: Install OpenGrep
+        continue-on-error: true
         env:
+          OPENGREP_VERSION: v1.19.0
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o "$HOME/.local/bin/opengrep" \
+            "https://github.com/opengrep/opengrep/releases/download/${OPENGREP_VERSION}/opengrep_manylinux_x86"
+          chmod +x "$HOME/.local/bin/opengrep"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/opengrep" --version
+          pip3 install --target="$HOME/.cache/opengrep/${OPENGREP_VERSION}" \
+            charset-normalizer==3.4.1 chardet==5.2.0
+
+      - name: Run Rusty Bot
+        run: node packages/github-action/dist/cli.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUSTY_MODE: github-action
+          # the job timeout is 15 minutes and install + build use some of it;
+          # the deadline makes the review post what it has instead of being cancelled
+          RUSTY_REVIEW_DEADLINE_MS: "600000"
           # provider keys — each gateway reads its own
           REQUESTY_API_KEY: ${{ secrets.REQUESTY_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -81,9 +112,8 @@ jobs:
           # findings (hard clustering job) vs. the same ones (easy job).
           # see CONSENSUS-QUALITY-WRITEUP.md.
           RUSTY_LOG_RAW_FINDINGS: "true"
-          # docker actions mount the runner workspace at /github/workspace, so
-          # the ndjson written here is uploaded by the next step.
-          RUSTY_LOG_RAW_FINDINGS_FILE: /github/workspace/rusty-raw-findings.ndjson
+          # written to the workspace so the next step can upload it.
+          RUSTY_LOG_RAW_FINDINGS_FILE: ${{ github.workspace }}/rusty-raw-findings.ndjson
           LOG_LEVEL: debug
 
       - name: Upload raw findings

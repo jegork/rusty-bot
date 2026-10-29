@@ -43,7 +43,10 @@ export interface ConsensusMetadata {
    * and the review proceeded with a lowered effective threshold instead of
    * aborting. judge filtering becomes the primary quality gate in this case. */
   degraded: boolean;
-  agreementRate: number;
+  /** mean pairwise Jaccard overlap, across successful passes, of the finding
+   * clusters each pass contributed to. `null` when fewer than 2 passes
+   * succeeded or there were no finding clusters to agree on. */
+  agreementRate: number | null;
   recommendationElevated: boolean;
   passRecommendations: Recommendation[];
   /** true when every pass ran the same model with the same settings, so

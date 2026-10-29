@@ -86,6 +86,40 @@ describe("formatSummaryComment", () => {
     expect(result).toContain("Reviewed by claude-opus-4-20250514 · 50000 tokens");
   });
 
+  it("omits the agreement text when agreementRate is null", () => {
+    const review = makeReview({
+      consensusMetadata: {
+        passes: 3,
+        threshold: 2,
+        effectiveThreshold: 2,
+        degraded: false,
+        agreementRate: null,
+        recommendationElevated: false,
+        passRecommendations: ["looks_good", "looks_good", "looks_good"],
+        failedPasses: 0,
+      },
+    });
+    const result = formatSummaryComment(review);
+    expect(result).toContain("consensus 3 passes");
+    expect(result).not.toContain("% agreement");
+  });
+
+  it("renders a numeric agreementRate as a percentage", () => {
+    const review = makeReview({
+      consensusMetadata: {
+        passes: 3,
+        threshold: 2,
+        effectiveThreshold: 2,
+        degraded: false,
+        agreementRate: 0.5,
+        recommendationElevated: false,
+        passRecommendations: ["looks_good", "looks_good", "looks_good"],
+        failedPasses: 0,
+      },
+    });
+    expect(formatSummaryComment(review)).toContain("50% agreement");
+  });
+
   it("renders all distinct pass models in the footer when consensus ran multiple models", () => {
     const review = makeReview({
       modelUsed: "openai/gpt-5-mini",

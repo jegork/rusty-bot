@@ -302,13 +302,80 @@ describe("runConsensusReview", () => {
     expect(result.consensusMetadata?.agreementRate).toBe(1);
   });
 
-  it("agreement rate is 0 when no clusters survive strict threshold", async () => {
+  it("agreement rate is the mean pairwise overlap when pass 2 disagrees with passes 0 and 1", async () => {
     const strictConfig = { ...config, consensusPasses: 3, consensusThreshold: 3 };
     const result = await runConsensusReview([], strictConfig, prMetadata, "diff content");
+    // pairs: (0,1) = 1, (0,2) = 0, (1,2) = 0
+    expect(result.consensusMetadata?.agreementRate).toBeCloseTo((1 + 0 + 0) / 3);
+  });
+
+  it("agreement rate is 1 when two passes report identical findings", async () => {
+    const { runReview } = await import("../agent/review.js");
+    (runReview as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(makeResult({ findings: [sharedFinding, uniqueFinding] }))
+      .mockResolvedValueOnce(makeResult({ findings: [sharedFinding, uniqueFinding] }));
+    const result = await runConsensusReview(
+      [],
+      { ...config, consensusPasses: 2 },
+      prMetadata,
+      "diff content",
+    );
+    expect(result.consensusMetadata?.agreementRate).toBe(1);
+  });
+
+  it("agreement rate is 0 when two passes report disjoint findings", async () => {
+    const { runReview } = await import("../agent/review.js");
+    (runReview as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(makeResult({ findings: [sharedFinding] }))
+      .mockResolvedValueOnce(makeResult({ findings: [uniqueFinding] }));
+    const result = await runConsensusReview(
+      [],
+      { ...config, consensusPasses: 2 },
+      prMetadata,
+      "diff content",
+    );
     expect(result.consensusMetadata?.agreementRate).toBe(0);
   });
 
-  it("agreement rate is 1 when there are zero finding clusters", async () => {
+  it("agreement rate averages pairwise jaccards over partially overlapping passes", async () => {
+    const { runReview } = await import("../agent/review.js");
+    const thirdFinding = makeFinding({
+      file: "src/third.ts",
+      line: 5,
+      message: "unrelated resource leak in the connection pool teardown",
+    });
+    (runReview as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(makeResult({ findings: [sharedFinding, uniqueFinding] }))
+      .mockResolvedValueOnce(makeResult({ findings: [sharedFinding] }))
+      .mockResolvedValueOnce(makeResult({ findings: [thirdFinding] }));
+    const result = await runConsensusReview(
+      [],
+      { ...config, consensusPasses: 3 },
+      prMetadata,
+      "diff content",
+    );
+    // clusters: shared {0,1}, unique {0}, third {2}
+    // (0,1) = 1/2, (0,2) = 0/3, (1,2) = 0/2
+    expect(result.consensusMetadata?.agreementRate).toBeCloseTo((0.5 + 0 + 0) / 3);
+  });
+
+  it("agreement rate treats two empty passes as agreeing", async () => {
+    const { runReview } = await import("../agent/review.js");
+    (runReview as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(makeResult({ findings: [] }))
+      .mockResolvedValueOnce(makeResult({ findings: [] }))
+      .mockResolvedValueOnce(makeResult({ findings: [sharedFinding] }));
+    const result = await runConsensusReview(
+      [],
+      { ...config, consensusPasses: 3 },
+      prMetadata,
+      "diff content",
+    );
+    // (0,1) both empty = 1, (0,2) = 0, (1,2) = 0
+    expect(result.consensusMetadata?.agreementRate).toBeCloseTo(1 / 3);
+  });
+
+  it("agreement rate is null when every pass finds nothing", async () => {
     const { runReview } = await import("../agent/review.js");
     (runReview as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(makeResult({ findings: [], tokenCount: 100 }))
@@ -316,7 +383,61 @@ describe("runConsensusReview", () => {
       .mockResolvedValueOnce(makeResult({ findings: [], tokenCount: 100 }));
     const consensusConfig = { ...config, consensusPasses: 3 };
     const result = await runConsensusReview([], consensusConfig, prMetadata, "diff content");
-    expect(result.consensusMetadata?.agreementRate).toBe(1);
+    expect(result.consensusMetadata?.agreementRate).toBeNull();
+  });
+
+  it("agreement rate is null when only one pass survives (degraded)", async () => {
+    const { runReview } = await import("../agent/review.js");
+    (runReview as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error("pass 0 failed"))
+      .mockRejectedValueOnce(new Error("pass 1 failed"))
+      .mockResolvedValueOnce(makeResult({ findings: [sharedFinding] }));
+    const result = await runConsensusReview(
+      [],
+      { ...config, consensusPasses: 3 },
+      prMetadata,
+      "diff content",
+    );
+    expect(result.consensusMetadata?.degraded).toBe(true);
+    expect(result.consensusMetadata?.agreementRate).toBeNull();
+  });
+
+  it("agreement rate is computed over the survivors only when one pass fails", async () => {
+    const { runReview } = await import("../agent/review.js");
+    (runReview as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(makeResult({ findings: [sharedFinding] }))
+      .mockRejectedValueOnce(new Error("pass 1 failed"))
+      .mockResolvedValueOnce(makeResult({ findings: [uniqueFinding] }));
+    const result = await runConsensusReview(
+      [],
+      { ...config, consensusPasses: 3 },
+      prMetadata,
+      "diff content",
+    );
+    expect(result.consensusMetadata?.failedPasses).toBe(1);
+    expect(result.consensusMetadata?.agreementRate).toBe(0);
+  });
+
+  it("does not count de-duplicated observations as dropped", async () => {
+    const { runReview } = await import("../agent/review.js");
+    const observation = {
+      file: "src/index.ts",
+      line: 10,
+      severity: "suggestion" as const,
+      category: "bugs" as const,
+      message: "consider extracting this block into a helper",
+    };
+    const same = () => makeResult({ observations: [observation] });
+    (runReview as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(same())
+      .mockResolvedValueOnce(same())
+      .mockResolvedValueOnce(same());
+    const { logger } = await import("../logger.js");
+    const infoSpy = vi.spyOn(logger, "info");
+    await runConsensusReview([], { ...config, consensusPasses: 3 }, prMetadata, "diff content");
+    const call = infoSpy.mock.calls.find((c) => c[1] === "consensus voting complete");
+    expect(call?.[0]).toMatchObject({ droppedObservations: 0, rawObservations: 3 });
+    infoSpy.mockRestore();
   });
 
   it("uses per-pass recommendations when findings are empty but majority flags issues", async () => {

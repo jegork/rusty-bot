@@ -60,6 +60,35 @@ function appendRawFindingsRecord(path: string, record: Record<string, unknown>):
   }
 }
 
+// mean pairwise jaccard between the cluster sets each successful pass contributed to.
+// null when there is no pair to compare or nothing to agree on.
+function meanPairwiseAgreement(
+  clusterPasses: readonly (readonly number[])[],
+  successfulPasses: readonly number[],
+): number | null {
+  if (successfulPasses.length < 2 || clusterPasses.length === 0) return null;
+  const slotOf = new Map(successfulPasses.map((p, slot) => [p, slot]));
+  const clusterSets = successfulPasses.map(() => new Set<number>());
+  clusterPasses.forEach((passes, clusterIndex) => {
+    for (const p of passes) {
+      const slot = slotOf.get(p);
+      if (slot !== undefined) clusterSets[slot].add(clusterIndex);
+    }
+  });
+  let sum = 0;
+  let pairs = 0;
+  for (let a = 0; a < clusterSets.length; a++) {
+    for (let b = a + 1; b < clusterSets.length; b++) {
+      let intersection = 0;
+      for (const c of clusterSets[a]) if (clusterSets[b].has(c)) intersection++;
+      const union = clusterSets[a].size + clusterSets[b].size - intersection;
+      sum += union === 0 ? 1 : intersection / union;
+      pairs++;
+    }
+  }
+  return sum / pairs;
+}
+
 function deriveBaseSeed(prMetadata: PRMetadata): number {
   let hash = 0;
   const str = `${prMetadata.id}:${prMetadata.sourceBranch}`;
@@ -416,8 +445,10 @@ export async function runConsensusReview(
   );
   const recommendationElevated = survivingFindings.length === 0 && recommendation !== "looks_good";
 
-  const agreementRate =
-    findingClusters.length > 0 ? survivingClusters.length / findingClusters.length : 1;
+  const agreementRate = meanPairwiseAgreement(
+    findingClusters.map((c) => c.passIndices.map((i) => resultPassIndices[i])),
+    resultPassIndices,
+  );
 
   logger.info(
     {
@@ -429,7 +460,8 @@ export async function runConsensusReview(
       totalClusters: findingClusters.length,
       surviving: survivingFindings.length,
       dropped: droppedFindings.length,
-      droppedObservations: totalRawObservations - survivingObservations.length,
+      rawObservations: totalRawObservations,
+      droppedObservations: observationClusters.length - survivingObservations.length,
       agreementRate,
       passRecommendations,
       passModels: passModelConfigs.map((m) => m.displayName),

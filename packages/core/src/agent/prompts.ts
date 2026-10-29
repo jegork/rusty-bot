@@ -11,6 +11,7 @@ import type {
 } from "../types.js";
 import type { OpenGrepFinding } from "../opengrep/types.js";
 import type { ReviewTier } from "./review.js";
+import { wrapUntrusted } from "./untrusted.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const promptsDir = resolve(__dirname, "../prompts");
@@ -77,16 +78,20 @@ export function buildSystemPrompt(config: ReviewConfig, tier: ReviewTier = "deep
     : tierSections.extended_output_requirements;
   const scopeCreepInstructions = scopeCreep ? `\n${loadTemplate("scope-creep.txt")}` : "";
 
+  // replacer functions: a string replacement would expand $&, $1 etc. in substituted values
   return base
-    .replace("{{tool_instructions}}", tierSections.tool_instructions)
-    .replace("{{extended_output_requirements}}", extendedOutputRequirements)
-    .replace("{{unverified_reference_qualifier}}", tierSections.unverified_reference_qualifier)
-    .replace("{{speculation_rule}}", tierSections.speculation_rule)
-    .replace("{{other_files_tool_note}}", tierSections.other_files_tool_note)
-    .replace("{{style_instructions}}", styleInstructions)
-    .replace("{{focus_instructions}}", focusInstructions)
-    .replace("{{scope_creep_instructions}}", scopeCreepInstructions)
-    .replace("{{convention_instructions}}", conventionInstructions);
+    .replace("{{tool_instructions}}", () => tierSections.tool_instructions)
+    .replace("{{extended_output_requirements}}", () => extendedOutputRequirements)
+    .replace(
+      "{{unverified_reference_qualifier}}",
+      () => tierSections.unverified_reference_qualifier,
+    )
+    .replace("{{speculation_rule}}", () => tierSections.speculation_rule)
+    .replace("{{other_files_tool_note}}", () => tierSections.other_files_tool_note)
+    .replace("{{style_instructions}}", () => styleInstructions)
+    .replace("{{focus_instructions}}", () => focusInstructions)
+    .replace("{{scope_creep_instructions}}", () => scopeCreepInstructions)
+    .replace("{{convention_instructions}}", () => conventionInstructions);
 }
 
 export interface CachedSystemMessage {
@@ -137,7 +142,7 @@ function buildOpenGrepSection(findings: OpenGrepFinding[]): string {
     );
     parts.push(`  ${f.message}`);
     if (f.snippet) {
-      parts.push(`  \`\`\`\`\n  ${f.snippet.trim()}\n  \`\`\`\``);
+      parts.push(wrapUntrusted("opengrep-snippet", f.snippet.trim()));
     }
   }
 
@@ -158,7 +163,7 @@ export function buildUserMessage(
   const parts: string[] = [];
 
   parts.push("## Pull Request");
-  parts.push(`**Title:** ${prMetadata.title}`);
+  parts.push(`**Title:**\n${wrapUntrusted("title", prMetadata.title)}`);
   parts.push(`**Author:** ${prMetadata.author}`);
   parts.push(`**Branch:** ${prMetadata.sourceBranch} → ${prMetadata.targetBranch}`);
 
@@ -167,7 +172,7 @@ export function buildUserMessage(
   }
 
   if (prMetadata.description) {
-    parts.push(`\n**Description:**\n${prMetadata.description}`);
+    parts.push(`\n**Description:**\n${wrapUntrusted("description", prMetadata.description)}`);
   }
 
   if (chunkFiles && chunkFiles.length > 0) {
@@ -184,12 +189,15 @@ export function buildUserMessage(
   if (ticketContext && ticketContext.length > 0) {
     parts.push("\n## Linked Tickets");
     for (const ticket of ticketContext) {
-      parts.push(`\n### ${ticket.source}: ${ticket.id} — ${ticket.title}`);
+      parts.push(`\n### ${ticket.source}: ${ticket.id}`);
+      parts.push(wrapUntrusted("ticket-title", ticket.title));
       if (ticket.description) {
-        parts.push(ticket.description);
+        parts.push(wrapUntrusted("ticket-description", ticket.description));
       }
       if (ticket.acceptanceCriteria) {
-        parts.push(`\n**Acceptance Criteria:**\n${ticket.acceptanceCriteria}`);
+        parts.push(
+          `\n**Acceptance Criteria:**\n${wrapUntrusted("ticket-acceptance-criteria", ticket.acceptanceCriteria)}`,
+        );
       }
       if (ticket.labels.length > 0) {
         parts.push(`**Labels:** ${ticket.labels.join(", ")}`);
@@ -262,7 +270,7 @@ export function buildUserMessage(
   }
 
   parts.push("\n## Diff\n");
-  parts.push(diff);
+  parts.push(wrapUntrusted("diff", diff));
 
   return parts.join("\n");
 }

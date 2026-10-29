@@ -91,7 +91,7 @@ case "$RUSTY_MODE" in
     exec node /app/packages/gitlab/dist/cli.js
     ;;
   *)
-    exec node /app/packages/github/dist/server.js
+    exec node /app/packages/github/dist/server-main.js
     ;;
 esac
 EOF

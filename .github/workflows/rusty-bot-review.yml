@@ -76,8 +76,9 @@ jobs:
           # the last allowed step is forced tool-free so a pass always ends with text
           RUSTY_LLM_MAX_STEPS: "20"
           RUSTY_JUDGE_ENABLED: "true"
-          # the judge must be at least as strong as the strongest panelist,
-          # or it silently drops true positives it cannot follow
+          # the judge must be at least as strong as the strongest panelist, or it
+          # silently drops true positives it cannot follow. on AA v4.3 glm-5.3-flash
+          # scores 42, above haiku-5.5 at high (38) and gpt-6-luna at xhigh (34).
           RUSTY_JUDGE_MODEL: openrouter/z-ai/glm-5.3-flash
           RUSTY_JUDGE_TEMPERATURE: "0"
           RUSTY_LLM_TRIAGE_MODEL: openrouter/anthropic/claude-haiku-5.5:low
@@ -90,8 +91,8 @@ jobs:
           RUSTY_GRAPH_CONTEXT_TOKEN_BUDGET: "2000"
           RUSTY_GRAPH_CONTEXT_MAX_CANDIDATES: "8"
           # per-step finishReason / toolCallCount logging. Surfaces tool-loop
-          # behavior (e.g. the deepseek-v4-pro on Fireworks pathology that
-          # exhausted MAX_STEPS=10 with verification searches).
+          # behavior (e.g. a pass that spends its whole step budget on
+          # verification searches).
           RUSTY_LOG_AGENT_STEPS: "true"
           # consensus-quality experiment: dump per-pass raw findings BEFORE
           # clustering so we can tell whether models are producing different

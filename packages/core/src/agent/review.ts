@@ -39,6 +39,44 @@ const STRUCTURED_OUTPUT_VALIDATION_ERROR_ID = "STRUCTURED_OUTPUT_SCHEMA_VALIDATI
 
 const EMPTY_PROVIDER_RESPONSE_ERROR_ID = "EMPTY_PROVIDER_RESPONSE";
 
+export const TOOL_LOOP_EXHAUSTED_ERROR_ID = "TOOL_LOOP_EXHAUSTED";
+
+const MAX_LOGGED_ERROR_MESSAGE_CHARS = 500;
+
+/**
+ * the ai-sdk's APICallError carries `requestBodyValues` (system prompt, convention
+ * files, the whole diff) and `responseBody`. logging the error object dumps all of
+ * it into the ci log, so log this summary instead. only affects what is logged.
+ */
+function summarizeLlmError(err: unknown): Record<string, unknown> {
+  if (typeof err !== "object" || err === null) return { message: String(err) };
+  const e = err as Record<string, unknown>;
+  const message = typeof e.message === "string" ? e.message : undefined;
+  return {
+    name: e.name,
+    message:
+      message && message.length > MAX_LOGGED_ERROR_MESSAGE_CHARS
+        ? `${message.slice(0, MAX_LOGGED_ERROR_MESSAGE_CHARS)}…`
+        : message,
+    statusCode: e.statusCode,
+    isRetryable: e.isRetryable,
+    url: e.url,
+    provider: e.provider,
+  };
+}
+
+/**
+ * a tool-calls finish with no text after the full step budget means the provider
+ * ignored the tool-free final step. re-running the identical trajectory fails the
+ * same way, and there is no prose for a structurer-only retry either.
+ */
+function isToolLoopExhausted(r: unknown, maxSteps: number): boolean {
+  const resp = r as { finishReason?: unknown; text?: unknown; steps?: unknown };
+  if (resp.finishReason !== "tool-calls") return false;
+  if (typeof resp.text === "string" && resp.text.length > 0) return false;
+  return Array.isArray(resp.steps) && resp.steps.length >= maxSteps;
+}
+
 function isStructuredOutputValidationError(err: unknown): boolean {
   return (
     typeof err === "object" &&
@@ -181,7 +219,10 @@ function createReviewPassTimeoutError(budgetMs: number): Error {
  * see FOLLOWUPS #3 (the Kimi tool-call termination diagnosis) and the
  * consensus quality writeup — this is the missing diagnostic for both.
  */
-function buildStepLogger(bindings: Record<string, unknown>): ((step: unknown) => void) | undefined {
+function buildStepLogger(
+  bindings: Record<string, unknown>,
+  attempt: number,
+): ((step: unknown) => void) | undefined {
   if (process.env.RUSTY_LOG_AGENT_STEPS !== "true") return undefined;
   let stepNumber = 0;
   return (step) => {
@@ -195,6 +236,7 @@ function buildStepLogger(bindings: Record<string, unknown>): ((step: unknown) =>
     log.info(
       {
         ...bindings,
+        attempt,
         stepNumber,
         finishReason: s.finishReason,
         toolCallCount: s.toolCalls?.length ?? 0,
@@ -318,7 +360,7 @@ async function retryStructurerOnProse(
     return { object: result.output, usage: result.usage };
   } catch (err) {
     log.warn(
-      { ...bindings, err },
+      { ...bindings, err: summarizeLlmError(err) },
       "structurer-only retry also failed; falling back to full reviewer reroll",
     );
     return null;
@@ -365,7 +407,7 @@ async function generateWithStructuredOutputRetry<T>(
   } catch (err) {
     if (!isStructuredOutputValidationError(err) || signal.aborted) throw err;
     log.warn(
-      { ...bindings, err },
+      { ...bindings, err: summarizeLlmError(err) },
       "structured output validation failed, retrying once before giving up on this pass",
     );
     return await fn();
@@ -386,7 +428,7 @@ async function generateWithTransientRetry<T>(
       if (!isTransientRetryableError(err) || attempt === maxRetries || signal.aborted) throw err;
       const backoffMs = TRANSIENT_RETRY_BACKOFF_MS[attempt];
       log.warn(
-        { ...bindings, err, attempt: attempt + 1, maxRetries, backoffMs },
+        { ...bindings, err: summarizeLlmError(err), attempt: attempt + 1, maxRetries, backoffMs },
         "transient LLM error, retrying after backoff",
       );
       await new Promise((resolve) => setTimeout(resolve, backoffMs));
@@ -521,7 +563,7 @@ export async function runReview(
     tier,
     ...(structuringConfig && { structuringModel: getModelDisplayName(structuringConfig) }),
   };
-  const onStepFinish = buildStepLogger(logBindings);
+  let generateAttempt = 0;
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   // providers can ignore the abort signal, so the pass is also raced against it
@@ -537,6 +579,8 @@ export async function runReview(
   const generation = generateWithTransientRetry(
     () =>
       generateWithStructuredOutputRetry(async () => {
+        generateAttempt++;
+        const onStepFinish = buildStepLogger(logBindings, generateAttempt);
         const r = await agent.generate(userMessage, {
           abortSignal: controller.signal,
           structuredOutput: {
@@ -579,6 +623,23 @@ export async function runReview(
             );
             (emptyErr as Error & { id?: string }).id = EMPTY_PROVIDER_RESPONSE_ERROR_ID;
             throw emptyErr;
+          }
+
+          if (isToolLoopExhausted(r, maxSteps)) {
+            const steps = (r as { steps: unknown[] }).steps.length;
+            log.warn(
+              {
+                ...logBindings,
+                steps,
+                toolCallCount: (r as { toolCalls?: unknown[] }).toolCalls?.length ?? 0,
+              },
+              "step budget spent on tool calls with no final answer — failing pass without retry",
+            );
+            const loopErr = new Error(
+              `model spent all ${maxSteps} steps on tool calls and never produced a final answer (provider likely ignored the tool-free final step)`,
+            );
+            (loopErr as Error & { id?: string }).id = TOOL_LOOP_EXHAUSTED_ERROR_ID;
+            throw loopErr;
           }
 
           // CHEAP RETRY: structurer-only on the reviewer's prose. The expensive

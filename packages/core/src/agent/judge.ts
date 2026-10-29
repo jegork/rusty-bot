@@ -169,8 +169,7 @@ function formatFindingsForJudge(
 function resolveJudgeModel(judgeModelOverride?: string) {
   // override must go through the full resolution chain so azure-openai/ prefix
   // + API key + resource name get wrapped in createAzure() — otherwise the
-  // raw string is handed to mastra's model router which doesn't know the
-  // azure-openai provider
+  // raw string is treated as an unknown router prefix
   const config = judgeModelOverride
     ? resolveModelConfigWithOverride(judgeModelOverride)
     : resolveModelConfig();

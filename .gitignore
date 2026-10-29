@@ -11,6 +11,5 @@ dist/
 *.key
 *.secret
 mcp-servers.json
-.mastra/
 .claude/
 data/

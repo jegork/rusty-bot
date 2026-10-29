@@ -103,7 +103,7 @@ export interface CachedSystemMessage {
 }
 
 /**
- * wrap the system prompt in Mastra's array-of-system-messages form, marking the
+ * wrap the system prompt in the ai-sdk's array-of-system-messages form, marking the
  * static block as cacheable for Anthropic when the resolved model supports it.
  */
 export function buildCachedSystemMessages(

@@ -4,7 +4,7 @@ import { writeFile, mkdir, rm, readFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
- 
+
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
 import { loadMcpServerConfigs, connectMcpServers } from "../mcp/client.js";
@@ -108,7 +108,7 @@ describe("connectMcpServers over stdio", () => {
       local: { command: process.execPath, args: [ECHO_SERVER], env: { ECHO_PID_FILE: pidFile } },
     });
 
-    // tools keep the <server>_<tool> names they had before the move off mastra
+    // tools are exposed as <server>_<tool>, the names existing configs rely on
     expect(Object.keys(mcp.tools)).toEqual(["local_echo"]);
     const result = await mcp.tools.local_echo.execute?.({ text: "hi" }, toolCallOptions);
     expect(result).toMatchObject({ content: [{ type: "text", text: "echo: hi" }] });

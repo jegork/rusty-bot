@@ -94,7 +94,7 @@ function resolveBaseModelConfig(model: string): ModelConfig {
   // azure-openai/<deployment> — derive deployment from the model prefix so a
   // single Azure resource can host multiple deployments (gpt-5.4-mini,
   // gpt-5.3-codex, etc.) and consensus passes can mix them.
-  // accepts AZURE_API_KEY (mastra convention) or AZURE_OPENAI_API_KEY.
+  // accepts AZURE_API_KEY or AZURE_OPENAI_API_KEY.
   // when no API key is present but AZURE_OPENAI_RESOURCE_NAME is set, fall
   // through to managed identity / Entra ID auth — DefaultAzureCredential
   // picks up workload-identity / service-principal / managed-identity creds

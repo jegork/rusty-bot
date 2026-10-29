@@ -63,10 +63,6 @@ To block PR merges, add a build validation policy: **Project Settings → Reposi
 
 See [Gating merges](/guides/gating-merges/) for the full setup walkthrough.
 
-## ADO PAT fallback
-
-For non-container usage (e.g. server mode), set `RUSTY_ADO_PAT` with a Personal Access Token that has **Code: Read** and **Pull Request Threads: Read & Write** scopes. In pipeline mode the `$(System.AccessToken)` is preferred and no PAT is needed.
-
 ## Incremental review
 
 When the pipeline runs again after a new iteration is pushed, the task only reviews the diff between the previously-reviewed iteration and the latest iteration instead of re-reviewing the full PR.

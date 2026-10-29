@@ -19,38 +19,11 @@ Built on the [AI SDK](https://ai-sdk.dev) (TypeScript).
 - **PR description generation** — optionally generate a structured PR description from the diff when the description is empty or a placeholder (off by default)
 - **Scope creep detection** — optionally list changes in the diff that fall outside the PR's stated intent (title, description, linked tickets) in a dedicated summary section (off by default; enable with `RUSTY_FLAG_SCOPE_CREEP=true`)
 - **Incremental review** — on subsequent pushes the bot reviews only the diff since the previously-reviewed state (commit on GitHub/GitLab, PR iteration on Azure DevOps) instead of the entire PR, cutting tokens on multi-commit PRs. The previous summary, recommendation, and surfaced findings are carried forward so the agent keeps PR-wide context without re-reading the full diff (on by default; opt out with `RUSTY_INCREMENTAL_REVIEW=false`)
-- **GitHub + GitLab + Azure DevOps + local CLI** — webhook server for GitHub, pipeline task for Azure DevOps, GitLab CI job, a drop-in GitHub Action, or a `rusty-bot` CLI that runs reviews against any local git repo
-- **Web dashboard** — configure repos, review styles, focus areas, and view history
+- **GitHub + GitLab + Azure DevOps + local CLI** — a drop-in GitHub Action, pipeline task for Azure DevOps, GitLab CI job, or a `rusty-bot` CLI that runs reviews against any local git repo
 
 ## Quick Start
 
-```bash
-# install dependencies
-pnpm install
-
-# build all packages
-pnpm -r build
-
-# copy env template and configure
-cp .env.example .env
-# edit .env — set at least one LLM API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)
-
-# start the server
-pnpm --filter @rusty-bot/github start
-```
-
-Server runs on `http://localhost:3000`. Dashboard is at `/`, health check at `/health`.
-
-## Quick Start (Podman)
-
-```bash
-cp .env.example .env
-# edit .env with your API keys
-
-podman compose up --build
-```
-
-The image defaults to `root` so CI container handlers (GitHub Actions, Azure Pipelines, GitLab CI) can perform their in-container agent setup. The included `compose.yaml` drops privileges via `user: rusty` for the long-running webhook server. If you run the image standalone outside of CI and want non-root, pass `--user rusty` to `docker run` / `podman run`.
+Rusty Bot runs as a one-shot job inside your CI: pick [GitHub Action Setup](#github-action-setup), [Azure DevOps Pipeline Setup](#azure-devops-pipeline-setup) or [GitLab CI Setup](#gitlab-ci-setup). To review a local branch from your terminal, see [Local CLI](#local-cli).
 
 ## Project Structure
 
@@ -67,37 +40,16 @@ packages/
 │   │   ├── opengrep/   # OpenGrep SAST runner and JSON output parser
 │   │   └── types.ts    # shared type definitions
 │   └── src/prompts/    # externalized prompt templates (styles + focus areas)
-├── github/         # GitHub App webhook server + config API
+├── github/         # GitHub provider library (used by github-action)
 ├── github-action/  # One-shot CLI driven by GitHub Actions env + event payload
 ├── azure-devops/   # Azure DevOps pipeline task (Docker entrypoint)
 ├── gitlab/         # GitLab CI task — provider + CLI driven by CI_MERGE_REQUEST_* env
-├── cli/            # `rusty-bot` CLI for local terminal-based reviews against any git repo
-└── dashboard/      # React SPA for configuration and review history
+└── cli/            # `rusty-bot` CLI for local terminal-based reviews against any git repo
 ```
-
-## GitHub App Setup
-
-1. Create a GitHub App at `https://github.com/settings/apps/new` or use the provided `github-app-manifest.json`
-2. Required permissions:
-   - **Pull requests**: Read & Write
-   - **Issues**: Read
-   - **Contents**: Read
-3. Subscribe to the **Pull request** event
-4. Generate a private key and download it
-5. Set environment variables:
-
-```bash
-GITHUB_APP_ID=123456
-GITHUB_PRIVATE_KEY_PATH=./private-key.pem
-GITHUB_WEBHOOK_SECRET=your-secret
-```
-
-6. Point the webhook URL to `https://your-domain/api/webhooks/github`
-7. Install the app on your repositories
 
 ## GitHub Action Setup
 
-The repo publishes a Docker-based GitHub Action alongside the webhook server. Drop it into any repo to get AI review on pull requests without hosting anything — reviews run on the GitHub-hosted runner, authenticated with the built-in `GITHUB_TOKEN`.
+The repo publishes a Docker-based GitHub Action. Drop it into any repo to get AI review on pull requests without hosting anything — reviews run on the GitHub-hosted runner, authenticated with the built-in `GITHUB_TOKEN`.
 
 ```yaml
 on:
@@ -269,11 +221,6 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 | `OPENAI_API_KEY` | OpenAI API key | — |
 | `ANTHROPIC_API_KEY` | Anthropic API key | — |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Google AI API key | — |
-| `RUSTY_DB_URL` | libSQL database URL | `file:./rusty.db` |
-| `GITHUB_APP_ID` | GitHub App ID | — |
-| `GITHUB_PRIVATE_KEY_PATH` | path to GitHub App private key PEM | — |
-| `GITHUB_PRIVATE_KEY` | inline PEM (alternative to path) | — |
-| `GITHUB_WEBHOOK_SECRET` | GitHub webhook secret | — |
 | `RUSTY_REVIEW_STYLE` | default review style | `balanced` |
 | `RUSTY_FOCUS_AREAS` | comma-separated focus areas | all enabled |
 | `RUSTY_IGNORE_PATTERNS` | comma-separated glob patterns to skip | — |
@@ -297,7 +244,6 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 | `RUSTY_JIRA_EMAIL` | Jira auth email | — |
 | `RUSTY_JIRA_API_TOKEN` | Jira API token | — |
 | `RUSTY_LINEAR_API_KEY` | Linear API key | — |
-| `RUSTY_ADO_PAT` | Azure DevOps PAT (server mode) | — |
 | `RUSTY_GITLAB_TOKEN` | GitLab project/personal access token (`api` scope) used by the GitLab CI job | falls back to `CI_JOB_TOKEN` |
 | `RUSTY_GITLAB_API_URL` | GitLab API v4 base URL (override for self-hosted; defaults to `CI_API_V4_URL`) | — |
 | `RUSTY_GITLAB_PROJECT_PATH` | Override `CI_PROJECT_PATH` when invoking the GitLab CLI outside of GitLab CI | — |
@@ -540,18 +486,7 @@ Costs: one extra LLM call per review pass (small on a cheap model) and ~3–8s o
 
 ### Per-Repository Configuration
 
-Configure via the web dashboard at `http://localhost:3000` or the API:
-
-```bash
-# set repo config
-curl -X PUT http://localhost:3000/api/config/repos/owner/repo \
-  -H "Content-Type: application/json" \
-  -d '{
-    "style": "roast",
-    "focusAreas": ["security", "bugs", "performance"],
-    "ignorePatterns": ["*.generated.ts", "vendor/**"]
-  }'
-```
+Configuration is env-only: every run reads the `RUSTY_*` variables from its CI job (see [Environment Variables](#environment-variables)), so per-repo settings live in each repo's pipeline definition.
 
 ### Convention Files
 
@@ -766,19 +701,17 @@ RUSTY_OPENGREP_RULES=p/security-audit
 
 By default, each review runs 3 independent passes with shuffled diff ordering (file and hunk order randomized per pass). Findings are clustered across passes using file match, line proximity (±5 lines), and message similarity (Jaccard ≥ 0.3). Only findings that appear in a majority of passes survive — the rest are dropped as likely false positives.
 
-Configure via per-repo config:
+Configure via env vars:
 
-```json
-{
-  "consensusPasses": 5,
-  "consensusThreshold": 3
-}
+```bash
+RUSTY_CONSENSUS_PASSES=5
+RUSTY_CONSENSUS_THRESHOLD=3
 ```
 
-| Setting | Description | Default |
+| Variable | Description | Default |
 |---------|-------------|---------|
-| `consensusPasses` | Number of independent review passes (1 = disabled) | `3` |
-| `consensusThreshold` | Minimum votes to keep a finding (`null` = simple majority) | `ceil(passes/2)` |
+| `RUSTY_CONSENSUS_PASSES` | Number of independent review passes (1 = disabled) | `3` |
+| `RUSTY_CONSENSUS_THRESHOLD` | Minimum votes to keep a finding (unset = simple majority) | `ceil(passes/2)` |
 
 **How it works:**
 
@@ -858,8 +791,6 @@ Off by default. Enable via:
 ```bash
 RUSTY_GENERATE_DESCRIPTION=true
 ```
-
-Or per-repo in the dashboard (PR Description checkbox).
 
 **How it works:**
 
@@ -958,12 +889,6 @@ pnpm -r build
 # run tests
 
 pnpm test
-
-# start dev server
-pnpm --filter @rusty-bot/github start
-
-# start dashboard dev server (with hot reload)
-pnpm --filter @rusty-bot/dashboard dev
 ```
 
 ## Claude Code skills

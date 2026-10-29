@@ -21,10 +21,9 @@ pnpm test
 ```
 packages/
 ├── core/           # shared review engine (agent, diff, triage, tickets, opengrep)
-├── github/         # GitHub App webhook server
+├── github/         # GitHub provider library
 ├── github-action/  # one-shot CLI for GitHub Actions
-├── azure-devops/   # Azure Pipelines container entrypoint
-└── dashboard/      # React SPA for config and history
+└── azure-devops/   # Azure Pipelines container entrypoint
 docs/               # Astro Starlight documentation site
 ```
 

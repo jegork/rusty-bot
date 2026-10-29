@@ -11,8 +11,6 @@ Off by default. When enabled, Rusty Bot rewrites the PR title into [Conventional
 RUSTY_RENAME_TITLE_TO_CONVENTIONAL=true
 ```
 
-Or enable per-repo via the dashboard for the self-hosted GitHub App.
-
 ## How it works
 
 1. Before the review starts, the bot inspects the current PR title

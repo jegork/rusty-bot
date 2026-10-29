@@ -21,6 +21,7 @@ import {
   type ReviewResult,
 } from "@rusty-bot/core";
 import { LocalGitProvider } from "./local-provider.js";
+import { runAnalyzeFindings } from "./analyze-findings.js";
 import { parseArgs, HELP_TEXT, type CliArgs } from "./args.js";
 
 const log = logger.child({ package: "cli" });
@@ -169,6 +170,10 @@ export async function run(args: CliArgs): Promise<number> {
 }
 
 async function main(): Promise<number> {
+  if (process.argv[2] === "analyze-findings") {
+    return await runAnalyzeFindings(process.argv.slice(3));
+  }
+
   configureGlobalHttp();
 
   let args: CliArgs;

@@ -58,6 +58,7 @@ packages/
 ├── core/           # shared review engine
 │   ├── src/
 │   │   ├── agent/      # Mastra review agent, judge/filter pass, prompt templates, Zod output schema
+│   │   ├── analysis/   # pure analysis of consensus raw-findings ndjson (`rusty-bot analyze-findings`)
 │   │   ├── diff/       # unified diff parser, tree-sitter context expansion, file filter, token-aware compression
 │   │   ├── formatter/  # summary comment + inline comment markdown renderers
 │   │   ├── triage/     # file classification for cascading review (skip/skim/deep-review)
@@ -670,6 +671,24 @@ The pino logger has to be at `debug` level for this one — set `LOG_LEVEL=debug
 With the flag on, one more record per review is emitted after clustering: every cluster with its `voteCount`, whether it survived, and the `variants` (line, severity, category, message) that joined it. Those are the cross-model paraphrases you need to tune the Jaccard threshold. Records never include code snippets or suggested fixes.
 
 Set **`RUSTY_LOG_RAW_FINDINGS_FILE=<path>`** to also append the per-pass and cluster records to that file as NDJSON (one object per line, tagged `kind: "pass"` or `kind: "clusters"`). The file sink ignores `LOG_LEVEL`, and a write failure only logs a warning. The self-review workflow uploads it as a build artifact. Each consensus run also logs one `consensus run manifest` line (seed, passes, threshold, models, temperatures, cluster settings) so two runs can be compared. To A/B the clustering without rebuilding, override `RUSTY_CLUSTER_LINE_WINDOW`, `RUSTY_CLUSTER_JACCARD`, `RUSTY_CLUSTER_CATEGORY_JACCARD`, `RUSTY_CONSENSUS_PASSES` or `RUSTY_CONSENSUS_THRESHOLD` (defaults are unchanged; explicit repo config beats the consensus env vars).
+
+#### Analyzing the raw-findings artifact
+
+Every record carries a `runId` shared by the pass and cluster records of one consensus run (a PR split into chunks produces several runs). The cluster record also carries `passModels`, the run's `agreementRate`, and per cluster the `passIndices` (original pass slots) that contributed to it. Download the artifact from the self-review workflow run (`gh run download <run-id> -n <artifact-name>`, or from the Actions UI) and run:
+
+```bash
+rusty-bot analyze-findings raw-findings.ndjson [more-files...]
+rusty-bot analyze-findings raw-findings.ndjson --sweep 0.1,0.2,0.3,0.4
+rusty-bot analyze-findings raw-findings.ndjson --json
+```
+
+- **runs** — consensus runs found in the files. Records from before `runId` existed are grouped by PR id.
+- **mean agreement** — mean of each run's `agreementRate`, which is the mean pairwise Jaccard overlap between the sets of clusters each pair of passes contributed to. It is `null` (excluded from the mean, counted separately) when fewer than 2 passes succeeded or there were no findings.
+- **findings / singletons per model** — findings a model raised, and clusters only that model's pass contributed to. A model with many singletons raises findings nobody else confirms.
+- **votes** — histogram of clusters by number of agreeing passes.
+- **jaccard sweep** — re-clusters the recorded pass findings at each `--sweep` threshold (setting `RUSTY_CLUSTER_JACCARD` and `RUSTY_CLUSTER_CATEGORY_JACCARD` to it) and reports clusters, clusters that still meet each run's recorded effective threshold, and mean agreement. Runs without a cluster record are skipped.
+
+Malformed lines are skipped with a warning count; the command exits non-zero only when no file could be read.
 
 **`RUSTY_LOG_JUDGE_SCORES=true`** — emits one info-level record per judge pass with every finding's evaluation, not just the rejected ones:
 

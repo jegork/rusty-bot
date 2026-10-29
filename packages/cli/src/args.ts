@@ -21,6 +21,10 @@ export const HELP_TEXT = `Usage: rusty-bot [options]
 
 Run a rusty-bot code review against a local git diff and print the result.
 
+Subcommands:
+  analyze-findings <file...>   summarize consensus raw-findings ndjson files
+                               (see: rusty-bot analyze-findings --help)
+
 Options:
   --repo <path>          path to the git repo (default: cwd)
   --base <ref>           base ref to diff against (default: main)

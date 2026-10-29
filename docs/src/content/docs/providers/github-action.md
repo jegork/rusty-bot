@@ -22,6 +22,7 @@ jobs:
       contents: read
       issues: read
     steps:
+      - uses: actions/checkout@v4
       - uses: jegork/rusty-bot@v1
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -31,6 +32,8 @@ jobs:
           RUSTY_FOCUS_AREAS: security,bugs,performance
           RUSTY_FAIL_ON_CRITICAL: "true"
 ```
+
+The `actions/checkout` step gives the reviewer read-only search over the PR's code; without it the agent falls back to the GitHub code-search API, which only sees the default branch. The default `fetch-depth: 1` is enough — the Action fetches the PR head commit itself with the same `GITHUB_TOKEN`.
 
 The [Getting started](/rusty-bot/getting-started/) page has the bare minimum to get running. This page is the complete reference.
 

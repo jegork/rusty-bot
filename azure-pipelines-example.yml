@@ -13,6 +13,9 @@ container:
   env:
     RUSTY_MODE: pipeline
 
+# the implicit `checkout: self` is used for code search; the PR head commit is
+# fetched with System.AccessToken when the shallow checkout lacks it, so
+# fetchDepth: 0 is not required.
 steps:
   - script: node /app/packages/azure-devops/dist/cli.js
     displayName: Rusty Bot PR Review

@@ -10,7 +10,6 @@ import type {
 import {
   ReviewStyleSchema,
   filterFiles,
-  stripDeletionOnlyHunks,
   expandContext,
   summarizeLanguages,
   extractTicketRefs,
@@ -273,8 +272,7 @@ export async function runAction(config: ActionConfig): Promise<number> {
     rawPatches = parseDiff(rawDiff);
   }
 
-  const filtered = filterFiles(rawPatches, reviewConfig.ignorePatterns);
-  const reviewable = stripDeletionOnlyHunks(filtered);
+  const reviewable = filterFiles(rawPatches, reviewConfig.ignorePatterns);
   const skippedCount = rawPatches.length - reviewable.length;
   log.info(
     {

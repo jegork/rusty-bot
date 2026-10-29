@@ -4,7 +4,7 @@ const log = logger.child({ module: "convention-file" });
 
 const CONVENTION_FILENAMES = [".rusty-bot.md", "REVIEW-BOT.md", "AGENTS.md"] as const;
 
-const MAX_CONVENTION_TOKENS = 5_000;
+const MAX_CONVENTION_TOKENS = 15_000;
 
 type FileContentFetcher = (path: string, ref: string) => Promise<string | null>;
 

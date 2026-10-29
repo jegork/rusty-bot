@@ -11,6 +11,7 @@ import type {
 } from "../types.js";
 import { compressDiff } from "../diff/compress.js";
 import { shufflePatches } from "../diff/shuffle.js";
+import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import { clusterFindings, clusterObservations, getClusterConfig } from "./cluster.js";
 import { runReview, type RunReviewOptions } from "./review.js";
@@ -357,6 +358,7 @@ export async function runConsensusReview(
   // RUSTY_LOG_RAW_FINDINGS_FILE additionally appends the same records as ndjson.
   // records carry no snippets or suggested fixes so the file is safe to publish.
   const logRawFindings = process.env.RUSTY_LOG_RAW_FINDINGS === "true";
+  const runId = randomUUID();
   const rawFindingsFile = logRawFindings
     ? process.env.RUSTY_LOG_RAW_FINDINGS_FILE?.trim() || undefined
     : undefined;
@@ -366,6 +368,7 @@ export async function runConsensusReview(
     }
     for (let i = 0; i < results.length; i++) {
       const record = {
+        runId,
         prId: prMetadata.id,
         passIndex: resultPassIndices[i],
         model: passModelConfigs[resultPassIndices[i]].displayName,
@@ -387,16 +390,25 @@ export async function runConsensusReview(
 
   const findingClusters = clusterFindings(findingsByPass);
 
+  const agreementRate = meanPairwiseAgreement(
+    findingClusters.map((c) => c.passIndices.map((i) => resultPassIndices[i])),
+    resultPassIndices,
+  );
+
   if (logRawFindings) {
     const record = {
+      runId,
       prId: prMetadata.id,
       passes,
       effectiveThreshold,
+      agreementRate,
+      passModels: passModelConfigs.map((m) => m.displayName),
       clusters: findingClusters.map((c) => ({
         file: c.representative.file,
         line: c.representative.line,
         voteCount: c.voteCount,
         surviving: c.voteCount >= effectiveThreshold,
+        passIndices: c.passIndices.map((i) => resultPassIndices[i]),
         variants: c.variants.map((v) => ({
           line: v.line,
           severity: v.severity,
@@ -444,11 +456,6 @@ export async function runConsensusReview(
     effectiveThreshold,
   );
   const recommendationElevated = survivingFindings.length === 0 && recommendation !== "looks_good";
-
-  const agreementRate = meanPairwiseAgreement(
-    findingClusters.map((c) => c.passIndices.map((i) => resultPassIndices[i])),
-    resultPassIndices,
-  );
 
   logger.info(
     {

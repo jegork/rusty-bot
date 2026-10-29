@@ -48,3 +48,4 @@ export * from "./opengrep/index.js";
 export * from "./description/index.js";
 export * from "./title/index.js";
 export { fetchConventionFile } from "./convention-file.js";
+export * from "./analysis/raw-findings.js";

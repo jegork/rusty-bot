@@ -948,6 +948,49 @@ describe("raw findings cluster record and file sink", () => {
     infoSpy.mockRestore();
   });
 
+  it("tags both record kinds with one runId and records original-slot cluster membership", async () => {
+    process.env.RUSTY_LOG_RAW_FINDINGS = "true";
+    process.env.RUSTY_REVIEW_MODELS = "anthropic/model-a,anthropic/model-b,anthropic/model-c";
+    const path = join(dir, "raw.ndjson");
+    process.env.RUSTY_LOG_RAW_FINDINGS_FILE = path;
+    const { runReview } = await import("../agent/review.js");
+    (runReview as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("pass 0 fail"));
+    const { logger } = await import("../logger.js");
+    const infoSpy = vi.spyOn(logger, "info");
+
+    await runConsensusReview([], { ...config, consensusPasses: 3 }, prMetadata, "diff content");
+    await runConsensusReview([], { ...config, consensusPasses: 3 }, prMetadata, "diff content");
+
+    const manifest = infoSpy.mock.calls.find((c) => c[1] === "consensus run manifest")![0] as {
+      passModels: string[];
+    };
+    const records = readFileSync(path, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const firstRun = records.slice(0, 3);
+    const secondRun = records.slice(3);
+    const runIds = new Set(firstRun.map((r) => r.runId));
+    expect(runIds.size).toBe(1);
+    expect(typeof firstRun[0].runId).toBe("string");
+    expect(new Set(secondRun.map((r) => r.runId)).size).toBe(1);
+    expect(secondRun[0].runId).not.toBe(firstRun[0].runId);
+
+    const clusters = firstRun.find((r) => r.kind === "clusters") as unknown as {
+      passModels: string[];
+      agreementRate: number | null;
+      clusters: { passIndices: number[]; voteCount: number }[];
+    };
+    expect(clusters.passModels).toEqual(manifest.passModels);
+    expect(clusters.agreementRate).toEqual(expect.any(Number));
+    expect(clusters.clusters.length).toBeGreaterThan(0);
+    for (const c of clusters.clusters) {
+      expect(c.passIndices).toHaveLength(c.voteCount);
+      expect(c.passIndices.every((i) => i === 1 || i === 2)).toBe(true);
+    }
+    infoSpy.mockRestore();
+  });
+
   it("warns instead of failing the review when the path is unwritable", async () => {
     process.env.RUSTY_LOG_RAW_FINDINGS = "true";
     process.env.RUSTY_LOG_RAW_FINDINGS_FILE = join(dir, "missing-dir", "raw.ndjson");

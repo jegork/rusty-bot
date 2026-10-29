@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createOctokitIssueFetcher } from "../orchestrator.js";
+import { createOctokitIssueFetcher } from "../issue-fetcher.js";
 import type { Octokit } from "octokit";
 import { logger } from "@rusty-bot/core";
 

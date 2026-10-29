@@ -11,8 +11,6 @@ Off by default. When enabled, Rusty Bot generates a structured PR description be
 RUSTY_GENERATE_DESCRIPTION=true
 ```
 
-Or enable per-repo via the dashboard (PR Description checkbox).
-
 ## How it works
 
 1. Before the review starts, the bot checks the current PR description

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LocalGitProvider } from "../local-provider.js";
-import { gitEnv } from "../git-env.js";
+import { gitEnv } from "@rusty-bot/core";
 
 const execFileAsync = promisify(execFile);
 

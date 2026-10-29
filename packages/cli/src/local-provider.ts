@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join, isAbsolute } from "node:path";
 import { promisify } from "node:util";
 import {
+  gitEnv,
   logger,
   parseDiff,
   type CodeSearchResult,
@@ -10,7 +11,6 @@ import {
   type GitProvider,
   type PRMetadata,
 } from "@rusty-bot/core";
-import { gitEnv } from "./git-env.js";
 
 const execFileAsync = promisify(execFile);
 

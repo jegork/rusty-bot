@@ -59,42 +59,29 @@ jobs:
           # the job timeout is 15 minutes and install + build use some of it;
           # the deadline makes the review post what it has instead of being cancelled
           RUSTY_REVIEW_DEADLINE_MS: "600000"
-          # provider keys — each gateway reads its own
-          REQUESTY_API_KEY: ${{ secrets.REQUESTY_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          # ollama cloud — bearer auth via Authorization header. set
-          # RUSTY_OLLAMA_BASE_URL=https://ollama.com so any `ollama/*` model
-          # in RUSTY_REVIEW_MODELS routes via the hosted endpoint instead of
-          # the local default (http://127.0.0.1:11434).
-          RUSTY_OLLAMA_BASE_URL: https://ollama.com
-          RUSTY_OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
 
-          RUSTY_LLM_MODEL: openrouter/google/gemini-3.1-flash-lite-preview
-          RUSTY_REVIEW_TEMPERATURE: "1"
-          # cross-vendor consensus mirroring the downstream BuildFind baseline.
-          # deepseek-v4-flash + kimi via Ollama Cloud (direct routing, no
-          # proxy markup), grok via OpenRouter (`x-ai/...` is OpenRouter's
-          # naming convention; Requesty uses `xai/...` — they're not
-          # interchangeable, see Model + Provider Routing Notes in README).
+          # same panel as the BuildFind downstream. the default model also
+          # serves the title, description and structuring calls.
+          RUSTY_LLM_MODEL: openrouter/anthropic/claude-haiku-5.5:low
+          # positional with RUSTY_REVIEW_TEMPERATURES. seat 1 also runs the
+          # skim tier; seat 3 joins when adaptive passes plans three.
+          # openrouter drops temperature for haiku and luna.
           RUSTY_REVIEW_MODELS: >-
-            ollama/deepseek-v4-flash:cloud,
-            openrouter/x-ai/grok-4.3,
-            ollama/kimi-k2.6:cloud
-          RUSTY_REVIEW_TEMPERATURES: "0.3,0.3,1"
+            openrouter/anthropic/claude-haiku-5.5:high,
+            openrouter/openai/gpt-6-luna:xhigh,
+            openrouter/z-ai/glm-5.3-flash
+          RUSTY_REVIEW_TEMPERATURES: "0.2,0.3,0.2"
           RUSTY_REVIEW_ADAPTIVE_PASSES: "true"
-          RUSTY_LLM_STRUCTURING_MODEL: openrouter/google/gemini-3.1-flash-lite-preview
-          # cap tool-using trajectories so tool-happy models (Kimi/Anthropic)
-          # can't terminate with finishReason="tool-calls" and zero text. the
-          # final allowed step gets toolChoice="none" so the model has to emit
-          # the structured-output JSON. see #152.
-          RUSTY_LLM_MAX_STEPS: "10"
+          # the last allowed step is forced tool-free so a pass always ends with text
+          RUSTY_LLM_MAX_STEPS: "20"
           RUSTY_JUDGE_ENABLED: "true"
-          # judge has no tools (single call per PR, no tool-loop risk). using
-          # deepseek-v4-flash on Ollama Cloud — cheaper than the v4-pro route
-          # and the flash variant is plenty for the structured-scoring task.
-          RUSTY_JUDGE_MODEL: ollama/deepseek-v4-flash:cloud
-          RUSTY_JUDGE_TEMPERATURE: "0.1"
-          RUSTY_LLM_TRIAGE_MODEL: openrouter/google/gemini-3.1-flash-lite-preview
+          # the judge must be at least as strong as the strongest panelist, or it
+          # silently drops true positives it cannot follow. on AA v4.3 glm-5.3-flash
+          # scores 42, above haiku-5.5 at high (38) and gpt-6-luna at xhigh (34).
+          RUSTY_JUDGE_MODEL: openrouter/z-ai/glm-5.3-flash
+          RUSTY_JUDGE_TEMPERATURE: "0"
+          RUSTY_LLM_TRIAGE_MODEL: openrouter/anthropic/claude-haiku-5.5:low
           RUSTY_TRIAGE_TEMPERATURE: "0"
           RUSTY_REVIEW_STYLE: balanced
           RUSTY_FAIL_ON_CRITICAL: "true"
@@ -104,8 +91,8 @@ jobs:
           RUSTY_GRAPH_CONTEXT_TOKEN_BUDGET: "2000"
           RUSTY_GRAPH_CONTEXT_MAX_CANDIDATES: "8"
           # per-step finishReason / toolCallCount logging. Surfaces tool-loop
-          # behavior (e.g. the deepseek-v4-pro on Fireworks pathology that
-          # exhausted MAX_STEPS=10 with verification searches).
+          # behavior (e.g. a pass that spends its whole step budget on
+          # verification searches).
           RUSTY_LOG_AGENT_STEPS: "true"
           # consensus-quality experiment: dump per-pass raw findings BEFORE
           # clustering so we can tell whether models are producing different

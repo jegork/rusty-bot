@@ -381,7 +381,9 @@ export function formatSummaryComment(
         ? `consensus ${cm.passes} passes (${cm.failedPasses} failed)`
         : `consensus ${cm.passes} passes`,
     );
-    parts.push(`${Math.round(cm.agreementRate * 100)}% agreement`);
+    if (cm.agreementRate !== null) {
+      parts.push(`${Math.round(cm.agreementRate * 100)}% agreement`);
+    }
     if (cm.recommendationElevated) {
       parts.push("recommendation elevated from pass votes");
     }

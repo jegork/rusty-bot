@@ -86,6 +86,15 @@ describe("clusterFindings", () => {
     expect(result[0].variants).toHaveLength(3);
   });
 
+  it("exposes the distinct pass indices each cluster drew items from", () => {
+    const f = makeFinding();
+    const other = makeFinding({ file: "src/other.ts", message: "unrelated issue elsewhere" });
+    const result = clusterFindings([[f, f], [], [f, other]]);
+    expect(result).toHaveLength(2);
+    expect([...result[0].passIndices].sort()).toEqual([0, 2]);
+    expect([...result[1].passIndices]).toEqual([2]);
+  });
+
   it("clusters findings on same file with nearby lines and similar messages", () => {
     const f1 = makeFinding({ line: 10 });
     const f2 = makeFinding({ line: 13, message: "potential null reference in handler" });

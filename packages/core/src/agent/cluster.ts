@@ -20,12 +20,15 @@ export interface FindingCluster {
   representative: Finding;
   voteCount: number;
   variants: Finding[];
+  /** indices into the `passResults` array that contributed at least one item */
+  passIndices: number[];
 }
 
 export interface ObservationCluster {
   representative: Observation;
   voteCount: number;
   variants: Observation[];
+  passIndices: number[];
 }
 
 interface Clusterable {
@@ -130,8 +133,8 @@ function pickRepresentative<T extends Clusterable>(items: T[]): T {
   })[0];
 }
 
-function countDistinctPasses<T extends Clusterable>(tagged: TaggedItem<T>[]): number {
-  return new Set(tagged.map((t) => t.passIndex)).size;
+function distinctPassIndices<T extends Clusterable>(tagged: TaggedItem<T>[]): number[] {
+  return [...new Set(tagged.map((t) => t.passIndex))];
 }
 
 export function clusterFindings(passResults: readonly (readonly Finding[])[]): FindingCluster[] {
@@ -139,8 +142,9 @@ export function clusterFindings(passResults: readonly (readonly Finding[])[]): F
     const allItems = cluster.items.map((t) => t.item);
     return {
       representative: pickRepresentative([...allItems]),
-      voteCount: countDistinctPasses(cluster.items),
+      voteCount: distinctPassIndices(cluster.items).length,
       variants: allItems,
+      passIndices: distinctPassIndices(cluster.items),
     };
   });
 }
@@ -152,8 +156,9 @@ export function clusterObservations(
     const allItems = cluster.items.map((t) => t.item);
     return {
       representative: pickRepresentative([...allItems]),
-      voteCount: countDistinctPasses(cluster.items),
+      voteCount: distinctPassIndices(cluster.items).length,
       variants: allItems,
+      passIndices: distinctPassIndices(cluster.items),
     };
   });
 }

@@ -74,6 +74,7 @@ describe("model:effort suffix reaches the agent", () => {
     ]) {
       vi.stubEnv(key, undefined);
     }
+    vi.stubEnv("OPENROUTER_API_KEY", "k");
   });
 
   afterEach(() => {
@@ -85,7 +86,7 @@ describe("model:effort suffix reaches the agent", () => {
     await expect(runReview(reviewConfig, "diff", prMetadata)).rejects.toThrow(STOP);
 
     const agent = lastAgent("review-agent");
-    expect(agent.model()).toBe("openrouter/openai/gpt-6-luna");
+    expect(agent.model()).toMatchObject({ modelId: "openai/gpt-6-luna" });
     expect(agent.defaultOptions).toEqual({
       providerOptions: { openrouter: { reasoning: { effort: "xhigh" } } },
     });
@@ -102,7 +103,7 @@ describe("model:effort suffix reaches the agent", () => {
     ).rejects.toThrow(STOP);
 
     const agent = lastAgent("review-judge");
-    expect(agent.model()).toBe("openrouter/x/y:batch");
+    expect(agent.model()).toMatchObject({ modelId: "x/y:batch" });
     expect(agent.defaultOptions).toEqual({
       providerOptions: { openrouter: { reasoning: { effort: "high" } } },
     });
@@ -113,7 +114,7 @@ describe("model:effort suffix reaches the agent", () => {
     await expect(runTriage(patches)).rejects.toThrow(STOP);
 
     const agent = lastAgent("triage-agent");
-    expect(agent.model()).toBe("openrouter/google/gemini-3-flash");
+    expect(agent.model()).toMatchObject({ modelId: "google/gemini-3-flash" });
     expect(agent.defaultOptions).toEqual({
       providerOptions: { openrouter: { reasoning: { effort: "minimal" } } },
     });
@@ -126,7 +127,7 @@ describe("model:effort suffix reaches the agent", () => {
 
     for (const id of ["title-agent", "description-agent"]) {
       const agent = lastAgent(id);
-      expect(agent.model()).toBe("openrouter/openai/gpt-6-luna");
+      expect(agent.model()).toMatchObject({ modelId: "openai/gpt-6-luna" });
       expect(agent.defaultOptions).toEqual({
         providerOptions: { openrouter: { reasoning: { effort: "low" } } },
       });

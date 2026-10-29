@@ -1,6 +1,10 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createAzure } from "@ai-sdk/azure";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createOpenAI } from "@ai-sdk/openai";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { DefaultAzureCredential } from "@azure/identity";
+import type { JSONValue } from "ai";
 import { createOllama } from "ai-sdk-ollama";
 
 // the values openrouter's reasoning.effort accepts
@@ -275,14 +279,61 @@ function makeFoundryFetch(opts: FoundryBodyOptions): typeof globalThis.fetch {
   }) as typeof globalThis.fetch;
 }
 
-export function resolveModel(
-  config: ModelConfig,
-): string | ReturnType<ReturnType<typeof createAzure>> {
-  // both createAzure(...)(...) and createOllama(...)(...) return the ai-sdk-v6
-  // LanguageModelV3 shape, so a single ReturnType<...> annotation is enough.
+function requireApiKey(envVar: string, model: string): string {
+  const key = process.env[envVar];
+  if (!key) throw new Error(`model "${model}" needs ${envVar} to be set`);
+  return key;
+}
+
+const ROUTER_PREFIXES = ["anthropic/", "openai/", "google/", "openrouter/", "requesty/"];
+
+// `<id>` is everything after the first slash, so gateway ids keep their own
+// vendor prefix (openrouter/x-ai/grok-4.3 → x-ai/grok-4.3)
+function resolveRouterModel(config: Extract<ModelConfig, { type: "router" }>): ResolvedModel {
+  const slash = config.model.indexOf("/");
+  const prefix = slash > 0 ? config.model.slice(0, slash + 1) : "";
+  const id = config.model.slice(slash + 1);
+  switch (prefix) {
+    case "anthropic/":
+      return createAnthropic({ apiKey: requireApiKey("ANTHROPIC_API_KEY", config.model) })(id);
+    case "openai/":
+      return createOpenAI({ apiKey: requireApiKey("OPENAI_API_KEY", config.model) })(id);
+    case "google/":
+      return createGoogleGenerativeAI({
+        apiKey: requireApiKey("GOOGLE_GENERATIVE_AI_API_KEY", config.model),
+      })(id);
+    case "openrouter/":
+      return createOpenAICompatible({
+        name: "openrouter",
+        baseURL: "https://openrouter.ai/api/v1",
+        apiKey: requireApiKey("OPENROUTER_API_KEY", config.model),
+        includeUsage: true,
+        supportsStructuredOutputs: supportsNativeStructuredOutput(config),
+      })(id);
+    case "requesty/":
+      return createOpenAICompatible({
+        name: "requesty",
+        baseURL: "https://router.requesty.ai/v1",
+        apiKey: requireApiKey("REQUESTY_API_KEY", config.model),
+        includeUsage: true,
+        supportsStructuredOutputs: supportsNativeStructuredOutput(config),
+      })(id);
+    default:
+      throw new Error(
+        `model "${config.model}" has no supported provider prefix. use one of ${ROUTER_PREFIXES.join(", ")}, ` +
+          "azure-openai/, azure-foundry/, azure-anthropic/ (with their azure env vars), ollama/, " +
+          "or set RUSTY_LLM_BASE_URL for an openai-compatible endpoint",
+      );
+  }
+}
+
+// every factory below returns the ai-sdk-v6 LanguageModelV3 shape
+type ResolvedModel = ReturnType<ReturnType<typeof createAzure>>;
+
+export function resolveModel(config: ModelConfig): ResolvedModel {
   switch (config.type) {
     case "router":
-      return config.model;
+      return resolveRouterModel(config);
 
     case "azure-api-key": {
       const azure = createAzure({
@@ -389,7 +440,11 @@ export function resolveModel(
     }
 
     case "openai-compatible":
-      return config.model;
+      return createOpenAICompatible({
+        name: "custom",
+        baseURL: config.baseUrl,
+        ...(config.apiKey && { apiKey: config.apiKey }),
+      })(config.model);
 
     case "ollama": {
       const ollama = createOllama({
@@ -401,38 +456,32 @@ export function resolveModel(
   }
 }
 
-export function resolveDefaultAgentOptions(config: ModelConfig):
-  | {
-      providerOptions: {
-        requesty?: { auto_cache: true };
-        openrouter?: { reasoning: { effort: ReasoningEffort } };
-        azure?: { reasoningEffort: ReasoningEffort; forceReasoning: true };
-      };
-    }
-  | undefined {
+export type ProviderOptions = Record<string, Record<string, JSONValue>>;
+
+export function resolveProviderOptions(config: ModelConfig): ProviderOptions | undefined {
   if (config.type === "azure-api-key" || config.type === "azure-managed-identity") {
     if (!config.reasoningEffort) return undefined;
     // the sdk infers reasoning support from the model id, which on azure is a
     // free-form deployment name; unforced, it drops the effort for names like
     // "review-model" with only a warning
-    return {
-      providerOptions: {
-        azure: { reasoningEffort: config.reasoningEffort, forceReasoning: true as const },
-      },
-    };
+    return { azure: { reasoningEffort: config.reasoningEffort, forceReasoning: true } };
   }
   if (config.type !== "router") return undefined;
   const autoCache =
     process.env.RUSTY_PROMPT_CACHE !== "false" && config.model.startsWith("requesty/");
   if (!autoCache && !config.reasoningEffort) return undefined;
-  return {
-    providerOptions: {
-      ...(autoCache && { requesty: { auto_cache: true as const } }),
-      ...(config.reasoningEffort && {
-        openrouter: { reasoning: { effort: config.reasoningEffort } },
-      }),
-    },
-  };
+  const options: ProviderOptions = {};
+  if (autoCache) options.requesty = { auto_cache: true };
+  if (config.reasoningEffort)
+    options.openrouter = { reasoning: { effort: config.reasoningEffort } };
+  return options;
+}
+
+export function resolveDefaultAgentOptions(
+  config: ModelConfig,
+): { providerOptions: ProviderOptions } | undefined {
+  const providerOptions = resolveProviderOptions(config);
+  return providerOptions && { providerOptions };
 }
 
 export function supportsAnthropicCacheControl(config: ModelConfig): boolean {

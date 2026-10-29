@@ -1,8 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { resolveDefaultAgentOptions, resolveModel, type ModelConfig } from "../agent/model.js";
 
-type LanguageModel = Exclude<ReturnType<typeof resolveModel>, string>;
-
 // runs the real @ai-sdk/azure responses model and captures the request body, so
 // a wrong providerOptions key (the sdk silently ignores unknown ones) fails here
 async function captureRequestBody(config: ModelConfig): Promise<Record<string, unknown>> {
@@ -15,7 +13,7 @@ async function captureRequestBody(config: ModelConfig): Promise<Record<string, u
     }),
   );
 
-  const model = resolveModel(config) as LanguageModel;
+  const model = resolveModel(config);
   await expect(
     model.doGenerate({
       prompt: [{ role: "user", content: [{ type: "text", text: "hi" }] }],

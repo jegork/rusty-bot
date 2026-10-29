@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { generateText } from "ai";
 import {
   resolveModelConfig,
   resolveTriageModelConfig,
@@ -14,6 +15,8 @@ import {
   mutateBodyForFoundry,
   parseModelEffort,
   resolveModel,
+  resolveProviderOptions,
+  type ModelConfig,
 } from "../agent/model.js";
 
 function clearEnv() {
@@ -48,6 +51,9 @@ function clearEnv() {
   delete process.env.RUSTY_OLLAMA_API_KEY;
   delete process.env.OLLAMA_API_KEY;
   delete process.env.OPENROUTER_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
 }
 
 describe("resolveModelConfig", () => {
@@ -102,7 +108,7 @@ describe("resolveModelConfig", () => {
     expect(config.type).toBe("router");
   });
 
-  it("leaves requesty/ models on the native mastra router", () => {
+  it("resolves requesty/ models to a router config", () => {
     process.env.RUSTY_LLM_MODEL = "requesty/anthropic/claude-sonnet-4";
 
     const config = resolveModelConfig();
@@ -1316,9 +1322,10 @@ describe("model:effort suffix", () => {
     });
   });
 
-  it("never hands the suffixed id to the model router", () => {
+  it("never hands the suffixed id to the provider", () => {
     process.env.RUSTY_LLM_MODEL = "openrouter/openai/gpt-6-luna:xhigh";
-    expect(resolveModel(resolveModelConfig())).toBe("openrouter/openai/gpt-6-luna");
+    process.env.OPENROUTER_API_KEY = "k";
+    expect(resolveModel(resolveModelConfig())).toMatchObject({ modelId: "openai/gpt-6-luna" });
   });
 
   it("passes openrouter variants through with no effort", () => {
@@ -1550,5 +1557,171 @@ describe("model:effort suffix", () => {
     expect(
       resolveDisableThinking(resolveModelConfigWithOverride("azure-foundry/Kimi-K2.6:v2")),
     ).toBe(true);
+  });
+});
+
+function modelIdOf(model: ReturnType<typeof resolveModel>): string {
+  return (model as { modelId: string }).modelId;
+}
+
+describe("resolveModel routing", () => {
+  beforeEach(clearEnv);
+
+  it.each([
+    ["anthropic/claude-x", "ANTHROPIC_API_KEY", "claude-x"],
+    ["openai/gpt-x", "OPENAI_API_KEY", "gpt-x"],
+    ["google/gemini-x", "GOOGLE_GENERATIVE_AI_API_KEY", "gemini-x"],
+    ["openrouter/a/b", "OPENROUTER_API_KEY", "a/b"],
+    ["requesty/a/b", "REQUESTY_API_KEY", "a/b"],
+    ["openrouter/x-ai/grok-4.3:batch", "OPENROUTER_API_KEY", "x-ai/grok-4.3:batch"],
+  ])("routes %s to a provider instance with the id after the prefix", (model, key, id) => {
+    process.env[key] = "k";
+    expect(modelIdOf(resolveModel({ type: "router", model }))).toBe(id);
+  });
+
+  it.each([
+    ["anthropic/claude-x", "ANTHROPIC_API_KEY"],
+    ["openai/gpt-x", "OPENAI_API_KEY"],
+    ["google/gemini-x", "GOOGLE_GENERATIVE_AI_API_KEY"],
+    ["openrouter/a/b", "OPENROUTER_API_KEY"],
+    ["requesty/a/b", "REQUESTY_API_KEY"],
+  ])("fails at resolve time for %s when %s is missing", (model, key) => {
+    expect(() => resolveModel({ type: "router", model })).toThrow(key);
+  });
+
+  it("treats an empty api key as missing", () => {
+    process.env.OPENROUTER_API_KEY = "";
+    expect(() => resolveModel({ type: "router", model: "openrouter/a/b" })).toThrow(
+      "OPENROUTER_API_KEY",
+    );
+  });
+
+  it.each(["foo/bar", "mistral/large", "claude-sonnet", "/x", "openrouter"])(
+    "rejects %s and lists the supported prefixes",
+    (model) => {
+      process.env.OPENROUTER_API_KEY = "k";
+      expect(() => resolveModel({ type: "router", model })).toThrow(
+        /openrouter\/.*requesty\/.*RUSTY_LLM_BASE_URL/s,
+      );
+    },
+  );
+
+  it("does not match a prefix that only appears later in the id", () => {
+    process.env.OPENAI_API_KEY = "k";
+    expect(() => resolveModel({ type: "router", model: "custom/openai/gpt-x" })).toThrow(
+      /no supported provider prefix/,
+    );
+  });
+});
+
+// stubs fetch with a minimal chat-completions reply so the real provider runs
+// end to end and the outgoing request can be inspected
+function stubChatCompletions(): { url?: string; body?: Record<string, unknown> } {
+  const seen: { url?: string; body?: Record<string, unknown> } = {};
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: unknown, init?: RequestInit) => {
+      seen.url = String(input);
+      seen.body = JSON.parse(init?.body as string) as Record<string, unknown>;
+      return new Response(
+        JSON.stringify({
+          id: "c",
+          object: "chat.completion",
+          created: 0,
+          model: "m",
+          choices: [
+            { index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }),
+  );
+  return seen;
+}
+
+describe("openai-compatible routes on the wire", () => {
+  beforeEach(clearEnv);
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends RUSTY_LLM_BASE_URL requests to that base url with its api key", async () => {
+    process.env.RUSTY_LLM_BASE_URL = "http://proxy.test/v1";
+    process.env.RUSTY_LLM_API_KEY = "proxy-key";
+    process.env.RUSTY_LLM_MODEL = "my-model";
+    const config = resolveModelConfig();
+    expect(config.type).toBe("openai-compatible");
+
+    const seen = stubChatCompletions();
+    const fetchMock = vi.mocked(globalThis.fetch);
+    const r = await generateText({ model: resolveModel(config), prompt: "x" });
+
+    expect(r.text).toBe("ok");
+    expect(seen.url?.startsWith("http://proxy.test/v1")).toBe(true);
+    expect(seen.body?.model).toBe("my-model");
+    const headers = new Headers(fetchMock.mock.calls[0][1]?.headers);
+    expect(headers.get("authorization")).toBe("Bearer proxy-key");
+  });
+
+  it("sends no authorization header when RUSTY_LLM_API_KEY is unset", async () => {
+    const seen = stubChatCompletions();
+    const fetchMock = vi.mocked(globalThis.fetch);
+    await generateText({
+      model: resolveModel({
+        type: "openai-compatible",
+        baseUrl: "http://proxy.test/v1",
+        model: "m",
+      }),
+      prompt: "x",
+    });
+    expect(seen.url?.startsWith("http://proxy.test/v1")).toBe(true);
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get("authorization")).toBeNull();
+  });
+
+  it("puts openrouter reasoning effort into the request body", async () => {
+    process.env.OPENROUTER_API_KEY = "k";
+    const config: ModelConfig = {
+      type: "router",
+      model: "openrouter/openai/gpt-6-luna",
+      reasoningEffort: "high",
+    };
+    const seen = stubChatCompletions();
+    await generateText({
+      model: resolveModel(config),
+      prompt: "x",
+      providerOptions: resolveProviderOptions(config),
+    });
+
+    expect(seen.url).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(seen.body?.model).toBe("openai/gpt-6-luna");
+    expect(seen.body?.reasoning).toEqual({ effort: "high" });
+  });
+
+  it("puts requesty auto_cache into the request body", async () => {
+    process.env.REQUESTY_API_KEY = "k";
+    const config: ModelConfig = { type: "router", model: "requesty/anthropic/claude-x" };
+    const seen = stubChatCompletions();
+    await generateText({
+      model: resolveModel(config),
+      prompt: "x",
+      providerOptions: resolveProviderOptions(config),
+    });
+
+    expect(seen.url).toBe("https://router.requesty.ai/v1/chat/completions");
+    expect(seen.body?.model).toBe("anthropic/claude-x");
+    expect(seen.body?.auto_cache).toBe(true);
+  });
+
+  it("does not leak one gateway's options into another's body", async () => {
+    process.env.REQUESTY_API_KEY = "k";
+    const seen = stubChatCompletions();
+    await generateText({
+      model: resolveModel({ type: "router", model: "requesty/anthropic/claude-x" }),
+      prompt: "x",
+      providerOptions: { openrouter: { reasoning: { effort: "high" } } },
+    });
+    expect(seen.body?.reasoning).toBeUndefined();
   });
 });

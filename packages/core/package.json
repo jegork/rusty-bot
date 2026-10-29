@@ -19,6 +19,9 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.111",
     "@ai-sdk/azure": "^3.0.102",
+    "@ai-sdk/google": "^3.0.139",
+    "@ai-sdk/openai": "^3.0.134",
+    "@ai-sdk/openai-compatible": "^2.0.87",
     "@azure/identity": "^4.13.2",
     "@mastra/core": "^1.59.0",
     "@mastra/libsql": "^1.20.0",

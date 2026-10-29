@@ -82,7 +82,7 @@ function meanPairwiseAgreement(
       let intersection = 0;
       for (const c of clusterSets[a]) if (clusterSets[b].has(c)) intersection++;
       const union = clusterSets[a].size + clusterSets[b].size - intersection;
-      sum += union === 0 ? 0 : intersection / union;
+      sum += union === 0 ? 1 : intersection / union;
       pairs++;
     }
   }

@@ -359,6 +359,22 @@ describe("runConsensusReview", () => {
     expect(result.consensusMetadata?.agreementRate).toBeCloseTo((0.5 + 0 + 0) / 3);
   });
 
+  it("agreement rate treats two empty passes as agreeing", async () => {
+    const { runReview } = await import("../agent/review.js");
+    (runReview as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(makeResult({ findings: [] }))
+      .mockResolvedValueOnce(makeResult({ findings: [] }))
+      .mockResolvedValueOnce(makeResult({ findings: [sharedFinding] }));
+    const result = await runConsensusReview(
+      [],
+      { ...config, consensusPasses: 3 },
+      prMetadata,
+      "diff content",
+    );
+    // (0,1) both empty = 1, (0,2) = 0, (1,2) = 0
+    expect(result.consensusMetadata?.agreementRate).toBeCloseTo(1 / 3);
+  });
+
   it("agreement rate is null when every pass finds nothing", async () => {
     const { runReview } = await import("../agent/review.js");
     (runReview as ReturnType<typeof vi.fn>)

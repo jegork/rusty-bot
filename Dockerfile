@@ -64,7 +64,7 @@ COPY <<'EOF' /app/entrypoint.sh
 set -e
 case "$RUSTY_MODE" in
   pipeline)
-    exec node /app/packages/azure-devops/dist/index.js
+    exec node /app/packages/azure-devops/dist/cli.js
     ;;
   github-action)
     exec node /app/packages/github-action/dist/cli.js

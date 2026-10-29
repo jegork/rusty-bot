@@ -4,6 +4,8 @@ const MARKER_PREFIX = "<!-- rusty-bot:context:";
 const MARKER_SUFFIX = " -->";
 export const PRIOR_CONTEXT_MARKER_RE = /<!--\s*rusty-bot:context:([A-Za-z0-9+/=]+)\s*-->/i;
 
+const PRIOR_CONTEXT_MARKER_GLOBAL_RE = new RegExp(PRIOR_CONTEXT_MARKER_RE.source, "gi");
+
 const SUMMARY_CHAR_CAP = 4_000;
 const FINDING_MESSAGE_CHAR_CAP = 250;
 const FINDINGS_COUNT_CAP = 50;
@@ -91,7 +93,10 @@ function isContext(value: unknown): value is PriorReviewContext {
 
 /** extract a prior-context marker from a comment body. returns null on absence or any malformedness. */
 export function extractPriorReviewContext(commentBody: string): PriorReviewContext | null {
-  const match = PRIOR_CONTEXT_MARKER_RE.exec(commentBody);
+  // providers write the marker in the header lines above the first blank line; anything
+  // later is model-authored text and must not be able to supply a marker
+  const header = commentBody.split(/\r?\n[ \t]*\r?\n/, 1)[0];
+  const match = PRIOR_CONTEXT_MARKER_RE.exec(header);
   if (!match) return null;
   try {
     const json = Buffer.from(match[1], "base64").toString("utf-8");
@@ -100,6 +105,17 @@ export function extractPriorReviewContext(commentBody: string): PriorReviewConte
   } catch {
     return null;
   }
+}
+
+/** remove anything shaped like a prior-context marker from model-authored text. */
+export function stripPriorContextMarkers(text: string): string {
+  let out = text;
+  // loop so removing one marker cannot splice its neighbours into a new one
+  for (let prev = ""; prev !== out;) {
+    prev = out;
+    out = out.replace(PRIOR_CONTEXT_MARKER_GLOBAL_RE, "");
+  }
+  return out;
 }
 
 export const PRIOR_CONTEXT_LIMITS = {

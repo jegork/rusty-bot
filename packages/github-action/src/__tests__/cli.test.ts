@@ -65,7 +65,12 @@ describe("parseConfig", () => {
   });
 
   afterEach(() => {
-    process.env = originalEnv;
+    // restore in place: reassigning process.env swaps the object vitest's
+    // stubEnv tracks, so later vi.stubEnv calls in this file would be no-ops
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) Reflect.deleteProperty(process.env, key);
+    }
+    Object.assign(process.env, originalEnv);
   });
 
   it("parses a minimal valid config", () => {

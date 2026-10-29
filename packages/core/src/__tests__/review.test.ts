@@ -3,6 +3,19 @@ import type { ReviewConfig, PRMetadata } from "../types.js";
 
 const generateMock = vi.fn();
 const generateTextMock = vi.fn();
+const logMock = vi.hoisted(() => {
+  const m: Record<string, unknown> = {};
+  for (const level of ["trace", "debug", "info", "warn", "error", "fatal"]) m[level] = vi.fn();
+  m.child = () => m;
+  return m as Record<"info" | "warn" | "error", ReturnType<typeof vi.fn>> & {
+    child: () => unknown;
+  };
+});
+
+vi.mock("../logger.js", () => ({
+  logger: logMock,
+  flushLogger: vi.fn(),
+}));
 
 vi.mock("@mastra/core/agent", () => ({
   Agent: vi.fn().mockImplementation(function () {
@@ -868,6 +881,159 @@ describe("runReview empty provider response", () => {
 
     expect(result.recommendation).toBe("looks_good");
     expect(generateMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("runReview tool-loop exhaustion", () => {
+  beforeEach(() => {
+    generateMock.mockReset();
+    generateTextMock.mockReset();
+    delete process.env.RUSTY_LLM_STRUCTURING_MODEL;
+    delete process.env.RUSTY_LLM_MAX_STEPS;
+  });
+
+  function toolLoopResponse(stepCount: number) {
+    return {
+      object: undefined,
+      text: "",
+      finishReason: "tool-calls",
+      toolCalls: [{ toolName: "search_code" }],
+      steps: Array.from({ length: stepCount }, () => ({})),
+      usage: { totalTokens: 900, inputTokens: 900, outputTokens: 10 },
+    };
+  }
+
+  it("fails fast without rerunning the trajectory when the step budget was spent on tool calls", async () => {
+    process.env.RUSTY_LLM_MAX_STEPS = "4";
+    process.env.RUSTY_LLM_STRUCTURING_MODEL = "test-structurer";
+    generateMock.mockResolvedValue(toolLoopResponse(4));
+
+    await expect(runReview(config, "diff", prMetadata)).rejects.toMatchObject({
+      id: "TOOL_LOOP_EXHAUSTED",
+    });
+    expect(generateMock).toHaveBeenCalledTimes(1);
+    expect(generateTextMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the existing retry when tool calls ended the attempt before the budget ran out", async () => {
+    process.env.RUSTY_LLM_MAX_STEPS = "4";
+    generateMock
+      .mockResolvedValueOnce(toolLoopResponse(3))
+      .mockResolvedValueOnce(makeValidResponse());
+
+    const result = await runReview(config, "diff", prMetadata);
+
+    expect(result.recommendation).toBe("looks_good");
+    expect(generateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the existing retry when the budget was spent but the model produced text", async () => {
+    process.env.RUSTY_LLM_MAX_STEPS = "4";
+    generateMock
+      .mockResolvedValueOnce({ ...toolLoopResponse(4), text: "some prose" })
+      .mockResolvedValueOnce(makeValidResponse());
+
+    await runReview(config, "diff", prMetadata);
+
+    expect(generateMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("runReview error log hygiene", () => {
+  beforeEach(() => {
+    generateMock.mockReset();
+    logMock.warn.mockReset();
+    delete process.env.RUSTY_LLM_MAX_RETRIES;
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("logs a summary of a transient LLM error without the request or response bodies", async () => {
+    const err = Object.assign(new Error("Gateway Timeout"), {
+      name: "AI_APICallError",
+      isRetryable: true,
+      statusCode: 504,
+      url: "https://openrouter.ai/api/v1/chat/completions",
+      requestBodyValues: { messages: ["SECRET-DIFF-CONTENT"] },
+      responseBody: "SECRET-RESPONSE-BODY",
+    });
+    generateMock.mockRejectedValueOnce(err).mockResolvedValueOnce(makeValidResponse());
+
+    const run = runReview(config, "diff", prMetadata);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await run;
+
+    const call = logMock.warn.mock.calls.find(
+      ([, msg]) => msg === "transient LLM error, retrying after backoff",
+    );
+    expect(call).toBeDefined();
+    const serialized = JSON.stringify(call![0]);
+    expect(serialized).not.toContain("SECRET-DIFF-CONTENT");
+    expect(serialized).not.toContain("SECRET-RESPONSE-BODY");
+    expect(call![0].err).toMatchObject({
+      name: "AI_APICallError",
+      message: "Gateway Timeout",
+      statusCode: 504,
+      isRetryable: true,
+    });
+  });
+
+  it("truncates very long error messages", async () => {
+    const err = Object.assign(new Error("x".repeat(5000)), { isRetryable: true });
+    generateMock.mockRejectedValueOnce(err).mockResolvedValueOnce(makeValidResponse());
+
+    const run = runReview(config, "diff", prMetadata);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await run;
+
+    const call = logMock.warn.mock.calls.find(
+      ([, msg]) => msg === "transient LLM error, retrying after backoff",
+    );
+    expect(call![0].err.message.length).toBeLessThan(600);
+  });
+});
+
+describe("runReview step log attempts", () => {
+  beforeEach(() => {
+    generateMock.mockReset();
+    logMock.info.mockReset();
+    vi.useFakeTimers();
+    process.env.RUSTY_LOG_AGENT_STEPS = "true";
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    delete process.env.RUSTY_LOG_AGENT_STEPS;
+  });
+
+  it("restarts stepNumber at 0 and bumps attempt on a transient retry", async () => {
+    const step = { finishReason: "tool-calls", toolCalls: [{}], usage: {}, warnings: [] };
+    generateMock.mockImplementation(async (_msg: string, opts: Record<string, unknown>) => {
+      const onStepFinish = opts.onStepFinish as (s: unknown) => void;
+      onStepFinish(step);
+      onStepFinish(step);
+      if (generateMock.mock.calls.length === 1) {
+        throw Object.assign(new Error("upstream"), { isRetryable: true });
+      }
+      return makeValidResponse();
+    });
+
+    const run = runReview(config, "diff", prMetadata);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await run;
+
+    const steps = logMock.info.mock.calls
+      .filter(([, msg]) => msg === "agent step finished")
+      .map(([o]) => ({ attempt: o.attempt, stepNumber: o.stepNumber }));
+    expect(steps).toEqual([
+      { attempt: 1, stepNumber: 0 },
+      { attempt: 1, stepNumber: 1 },
+      { attempt: 2, stepNumber: 0 },
+      { attempt: 2, stepNumber: 1 },
+    ]);
   });
 });
 

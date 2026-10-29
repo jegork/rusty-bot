@@ -7,12 +7,12 @@ By default, each review runs 3 independent passes with shuffled diff ordering (f
 
 ## Configuration
 
-Configure via per-repo config in the dashboard or API:
+Configure via env vars:
 
-| Setting              | Description                                                 | Default                               |
-| -------------------- | ----------------------------------------------------------- | ------------------------------------- |
-| `consensusPasses`    | Number of independent review passes (set to `1` to disable) | `3`                                   |
-| `consensusThreshold` | Minimum votes to keep a finding                             | strict majority (`floor(passes/2)+1`) |
+| Variable                    | Description                                                 | Default                               |
+| --------------------------- | ----------------------------------------------------------- | ------------------------------------- |
+| `RUSTY_CONSENSUS_PASSES`    | Number of independent review passes (set to `1` to disable) | `3`                                   |
+| `RUSTY_CONSENSUS_THRESHOLD` | Minimum votes to keep a finding                             | strict majority (`floor(passes/2)+1`) |
 
 You can also set per-pass review models with `RUSTY_REVIEW_MODELS`, for example:
 

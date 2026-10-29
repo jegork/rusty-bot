@@ -1,9 +1,9 @@
 ---
 title: Environment variables
-description: RUSTY_* variables read at runtime by the action and webhook server.
+description: RUSTY_* variables read at runtime by the CI jobs and the local CLI.
 ---
 
-Non-secret configuration lives in `RUSTY_*` env vars rather than action inputs, so the same values can be reused between the GitHub Action, the webhook server, and the Azure DevOps task without duplication.
+Non-secret configuration lives in `RUSTY_*` env vars rather than action inputs, so the same values can be reused between the GitHub Action, the Azure DevOps task, and the GitLab CI job without duplication.
 
 ## Core
 
@@ -13,7 +13,6 @@ Non-secret configuration lives in `RUSTY_*` env vars rather than action inputs, 
 | `RUSTY_REVIEW_STYLE` | `balanced` | One of `strict`, `balanced`, `lenient`, `roast`, `thorough` |
 | `RUSTY_FOCUS_AREAS` | all enabled | Comma-separated: `security,performance,bugs,style,tests,docs` |
 | `RUSTY_IGNORE_PATTERNS` | — | Comma-separated globs to skip (e.g. `*.lock,dist/**`) |
-| `RUSTY_DB_URL` | `file:./rusty.db` | libSQL database URL |
 | `RUSTY_MODE` | — | Set to `pipeline` in Azure Pipelines container |
 | `RUSTY_FAIL_ON_CRITICAL` | `true` | Exit with code 1 when critical findings are produced |
 | `RUSTY_REVIEW_DRAFTS` | `false` | Review draft PRs (skipped by default) |
@@ -140,13 +139,6 @@ See [PR title rewriting](/guides/pr-title/).
 
 See [MCP tools](/guides/mcp-tools/).
 
-## Dashboard (self-hosted only)
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `RUSTY_DASHBOARD` | `false` | Serve the embedded dashboard from the GitHub App webhook server when set to `true`. |
-| `RUSTY_DASHBOARD_DIR` | bundled | Override the directory served when the dashboard is enabled. Used for development. |
-
 ## Ticket integrations
 
 | Variable | Description |
@@ -155,20 +147,8 @@ See [MCP tools](/guides/mcp-tools/).
 | `RUSTY_JIRA_EMAIL` | Jira auth email |
 | `RUSTY_JIRA_API_TOKEN` | Jira API token (also exposed as the `jira-api-token` action input) |
 | `RUSTY_LINEAR_API_KEY` | Linear API key (also exposed as the `linear-api-key` action input) |
-| `RUSTY_ADO_PAT` | Azure DevOps PAT for non-container / server mode usage |
 
 See [Ticket integration](/guides/ticket-integration/).
-
-## GitHub App (self-hosted only)
-
-| Variable | Description |
-| --- | --- |
-| `GITHUB_APP_ID` | GitHub App ID |
-| `GITHUB_PRIVATE_KEY_PATH` | Path to the GitHub App private key PEM file |
-| `GITHUB_PRIVATE_KEY` | Inline PEM string (alternative to `GITHUB_PRIVATE_KEY_PATH`) |
-| `GITHUB_WEBHOOK_SECRET` | GitHub webhook secret |
-
-See [GitHub App (self-hosted)](/providers/github-app/).
 
 ---
 

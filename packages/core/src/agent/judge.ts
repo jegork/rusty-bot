@@ -1,15 +1,12 @@
-import { Agent } from "@mastra/core/agent";
 import { z } from "zod";
 import {
   resolveModelConfig,
   resolveModelConfigWithOverride,
-  resolveModel,
   getModelDisplayName,
   resolveModelSettings,
-  resolveDefaultAgentOptions,
-  resolveJsonPromptInjection,
   applyModelConstraints,
 } from "./model.js";
+import { generateStructured } from "./generate.js";
 import type { FilePatch, Finding, Hunk, ReviewResult } from "../types.js";
 import { logger } from "../logger.js";
 import { deriveMergedRecommendation } from "./recommendation.js";
@@ -172,8 +169,7 @@ function formatFindingsForJudge(
 function resolveJudgeModel(judgeModelOverride?: string) {
   // override must go through the full resolution chain so azure-openai/ prefix
   // + API key + resource name get wrapped in createAzure() — otherwise the
-  // raw string is handed to mastra's model router which doesn't know the
-  // azure-openai provider
+  // raw string is treated as an unknown router prefix
   const config = judgeModelOverride
     ? resolveModelConfigWithOverride(judgeModelOverride)
     : resolveModelConfig();
@@ -240,15 +236,6 @@ export async function judgeFindings(
     "running judge pass",
   );
 
-  const defaultOptions = resolveDefaultAgentOptions(modelConfig);
-  const agent = new Agent({
-    id: "review-judge",
-    name: "Rusty Bot Judge",
-    instructions: () => JUDGE_SYSTEM_PROMPT,
-    model: () => resolveModel(modelConfig),
-    ...(defaultOptions && { defaultOptions }),
-  });
-
   const userMessage = formatFindingsForJudge(findings, patches);
 
   let evaluations: JudgeEvaluation[];
@@ -260,11 +247,14 @@ export async function judgeFindings(
       temperature: 0,
       ...resolveModelSettings("judge"),
     });
-    const jsonPromptInjection = resolveJsonPromptInjection(modelConfig);
-    const response = await agent.generate(userMessage, {
-      structuredOutput: { schema: JudgeOutputSchema, jsonPromptInjection },
-      ...(Object.keys(modelSettings).length > 0 && { modelSettings }),
+    const response = await generateStructured({
+      modelConfig,
+      system: JUDGE_SYSTEM_PROMPT,
+      prompt: userMessage,
+      schema: JudgeOutputSchema,
+      settings: modelSettings,
     });
+    if (!response.object) throw new Error("judge returned no parseable object");
     evaluations = response.object.evaluations;
     tokenCount = response.usage.totalTokens ?? 0;
   } catch (err) {

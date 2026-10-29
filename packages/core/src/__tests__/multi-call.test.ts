@@ -396,6 +396,19 @@ describe("runMultiCallReview", () => {
     );
   });
 
+  it("builds the shared toolCache from the checkout when one is passed, even next to a provider", async () => {
+    const provider = { searchCode: vi.fn(), getFileContent: vi.fn() } as any;
+    const checkout = { approximate: true, grep: vi.fn(), readFile: vi.fn() } as any;
+    await runMultiCallReview([makePatch("small.ts", 10)], config, prMetadata, undefined, {
+      provider,
+      checkout,
+    });
+
+    const cache = runReviewMock.mock.calls[0][4]?.toolCache;
+    expect(cache?.scope).toBe("pr-head");
+    expect(cache?.approximate).toBe(true);
+  });
+
   it("does not create a toolCache without a provider", async () => {
     await runMultiCallReview([makePatch("small.ts", 10)], config, prMetadata);
 
@@ -909,6 +922,23 @@ describe("runCascadeReview", () => {
     const deepCalls = runReviewMock.mock.calls.filter((call) => call[4]?.tier !== "skim");
     expect(deepCalls[0][4]?.rankedContext).toContain("## Graph-ranked Context");
     expect(deepCalls[0][4]?.rankedContext).toContain("src/token.ts");
+  });
+
+  it("reads graph-ranked context from the checkout, without a sourceRef or provider", async () => {
+    process.env.RUSTY_GRAPH_CONTEXT = "true";
+    const files = new Map([
+      ["src/auth.ts", 'import { validateToken } from "./token";\nexport const a = validateToken;'],
+      ["src/token.ts", "export function validateToken(token: string) { return token; }"],
+    ]);
+    const readFile = vi.fn(async (path: string) => files.get(path) ?? null);
+
+    await runCascadeReview([], [makePatch("src/auth.ts", 20)], config, prMetadata, undefined, {
+      checkout: { approximate: false, grep: vi.fn(), readFile } as any,
+    });
+
+    const deepCalls = runReviewMock.mock.calls.filter((call) => call[4]?.tier !== "skim");
+    expect(deepCalls[0][4]?.rankedContext).toContain("src/token.ts");
+    expect(readFile).toHaveBeenCalledWith("src/token.ts");
   });
 
   function makeFinding(file: string): OpenGrepFinding {

@@ -1,41 +1,84 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { MCPClient } from "@mastra/mcp";
-import type { ToolsInput } from "@mastra/core/agent";
+import { createMCPClient, type MCPClient } from "@ai-sdk/mcp";
+import { Experimental_StdioMCPTransport } from "@ai-sdk/mcp/mcp-stdio";
+import type { ToolSet } from "ai";
 import type { McpServerConfig } from "./types.js";
 import { McpServerConfigSchema } from "./types.js";
 import { logger } from "../logger.js";
 
 const DEFAULT_CONFIG_FILE = "mcp-servers.json";
 
+type McpServerEntry = McpServerConfig[string];
+type StdioServerEntry = Extract<McpServerEntry, { command: string }>;
+type HttpServerEntry = Exclude<McpServerEntry, StdioServerEntry>;
+
+function isStdio(entry: McpServerEntry): entry is StdioServerEntry {
+  return typeof entry.command === "string";
+}
+
+function headersOf(entry: HttpServerEntry): Record<string, string> | undefined {
+  const headers = entry.requestInit?.headers;
+  if (headers === undefined) return undefined;
+  return Object.fromEntries(
+    new Headers(headers as ConstructorParameters<typeof Headers>[0]).entries(),
+  );
+}
+
+// url entries try streamable http first and fall back to sse, so configs
+// written against either transport keep working
+async function createClient(entry: McpServerEntry): Promise<MCPClient> {
+  if (isStdio(entry)) {
+    return createMCPClient({
+      transport: new Experimental_StdioMCPTransport({
+        command: entry.command,
+        ...(entry.args && { args: entry.args }),
+        ...(entry.env && { env: entry.env }),
+      }),
+    });
+  }
+  const url = String(entry.url);
+  const headers = headersOf(entry);
+  try {
+    return await createMCPClient({ transport: { type: "http", url, headers } });
+  } catch (err) {
+    logger.debug({ err, url }, "streamable http MCP connect failed; retrying over sse");
+    return createMCPClient({ transport: { type: "sse", url, headers } });
+  }
+}
+
 /**
  * Connects to the configured MCP servers, discovers their tools, and returns
- * Mastra-compatible tools plus a cleanup function to disconnect.
+ * them as an AI SDK tool set (named `<server>_<tool>`) plus a cleanup
+ * function to close the connections.
  *
  * Each server is connected independently — if one server fails, the rest
  * still contribute their tools.
  */
 export async function connectMcpServers(
   servers: McpServerConfig,
-): Promise<{ tools: ToolsInput; disconnect: () => Promise<void> }> {
+): Promise<{ tools: ToolSet; disconnect: () => Promise<void> }> {
   const names = Object.keys(servers);
   if (names.length === 0) {
     return { tools: {}, disconnect: () => Promise.resolve() };
   }
 
-  const allTools: ToolsInput = {};
+  const allTools: ToolSet = {};
   const connectedClients: MCPClient[] = [];
 
   for (const name of names) {
-    const client = new MCPClient({ servers: { [name]: servers[name] } });
+    let client: MCPClient | undefined;
     try {
-      const tools = await client.listTools();
-      Object.assign(allTools, tools);
+      client = await createClient(servers[name]);
+      const tools = await client.tools();
+      for (const [toolName, tool] of Object.entries(tools)) {
+        allTools[`${name}_${toolName}`] = tool;
+      }
       connectedClients.push(client);
     } catch (err) {
       logger.warn({ err, server: name }, "failed to connect MCP server; skipping");
       try {
-        await client.disconnect();
+        await client?.close();
       } catch {
         // ignore cleanup errors for failed connections
       }
@@ -43,7 +86,7 @@ export async function connectMcpServers(
   }
 
   const disconnect = async () => {
-    await Promise.allSettled(connectedClients.map((c) => c.disconnect()));
+    await Promise.allSettled(connectedClients.map((c) => c.close()));
   };
 
   return { tools: allTools, disconnect };
@@ -85,7 +128,7 @@ export async function loadMcpServerConfigs(filePath: string): Promise<McpServerC
     throw new Error(`${filePath}: invalid MCP servers config:\n${issues}`);
   }
 
-  return result.data as McpServerConfig;
+  return result.data;
 }
 
 /**

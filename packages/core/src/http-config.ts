@@ -23,7 +23,7 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 
 /**
  * configure undici's global dispatcher so all `fetch` calls (including
- * ai-sdk → Mastra → upstream LLM) get longer headers/body timeouts than
+ * ai-sdk → upstream LLM) get longer headers/body timeouts than
  * the 300s default. idempotent — safe to call from each CLI entry point.
  *
  * controlled by:

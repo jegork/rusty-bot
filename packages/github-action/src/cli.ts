@@ -37,6 +37,7 @@ import {
   filterAnchorableFindings,
   buildPriorContextFromReview,
   configureGlobalHttp,
+  resolveRepoCheckout,
 } from "@rusty-bot/core";
 import { GitHubProvider, RustyOctokit, createOctokitIssueFetcher } from "@rusty-bot/github";
 import {
@@ -219,6 +220,15 @@ export async function runAction(config: ActionConfig): Promise<number> {
     "reviewing PR",
   );
 
+  // actions/checkout leaves the merge commit on disk; the PR head is fetched with the job token
+  const checkout = await resolveRepoCheckout({
+    repoPath: process.env.GITHUB_WORKSPACE,
+    headSha: metadata.headSha,
+    fetchAuthHeader: "basic " + Buffer.from(`x-access-token:${config.token}`).toString("base64"),
+  });
+  const fetchSourceFile = (path: string) =>
+    checkout ? checkout.readFile(path) : provider.getFileContent(path, metadata.sourceBranch);
+
   const conventionFile = await fetchConventionFile(
     (path, ref) => provider.getFileContent(path, ref),
     metadata.targetBranch,
@@ -384,9 +394,7 @@ export async function runAction(config: ActionConfig): Promise<number> {
         "triage classification",
       );
 
-      const expandedDeep = await expandContext(deepReview, (path) =>
-        provider.getFileContent(path, metadata.sourceBranch),
-      );
+      const expandedDeep = await expandContext(deepReview, fetchSourceFile);
 
       review = await runCascadeReview(
         skim,
@@ -397,6 +405,7 @@ export async function runAction(config: ActionConfig): Promise<number> {
         {
           provider,
           sourceRef: metadata.sourceBranch,
+          checkout: checkout ?? undefined,
           languageSummary,
           mcpServers,
           maxTokens: MAX_TOKENS,
@@ -416,9 +425,7 @@ export async function runAction(config: ActionConfig): Promise<number> {
   }
 
   if (!review) {
-    const expanded = await expandContext(reviewable, (path) =>
-      provider.getFileContent(path, metadata.sourceBranch),
-    );
+    const expanded = await expandContext(reviewable, fetchSourceFile);
 
     review = await runMultiCallReview(
       expanded,
@@ -428,6 +435,7 @@ export async function runAction(config: ActionConfig): Promise<number> {
       {
         provider,
         sourceRef: metadata.sourceBranch,
+        checkout: checkout ?? undefined,
         languageSummary,
         mcpServers,
         maxTokens: MAX_TOKENS,

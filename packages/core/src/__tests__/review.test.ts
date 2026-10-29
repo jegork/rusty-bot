@@ -1,8 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type * as AiModule from "ai";
 import type { ReviewConfig, PRMetadata } from "../types.js";
+import { toGenerateTextResult, type FakeResponse } from "./fake-generate-text.js";
 
+// generateText calls for the reviewer model ("test-model") land in generateMock;
+// calls for any other model (the structuring model) land in generateTextMock
 const generateMock = vi.fn();
 const generateTextMock = vi.fn();
+const REVIEWER_MODEL = "test-model";
 const logMock = vi.hoisted(() => {
   const m: Record<string, unknown> = {};
   for (const level of ["trace", "debug", "info", "warn", "error", "fatal"]) m[level] = vi.fn();
@@ -17,20 +22,26 @@ vi.mock("../logger.js", () => ({
   flushLogger: vi.fn(),
 }));
 
-vi.mock("@mastra/core/agent", () => ({
-  Agent: vi.fn().mockImplementation(function () {
-    return { generate: generateMock };
-  }),
-}));
+vi.mock("ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof AiModule>();
+  return {
+    ...actual,
+    generateText: async (opts: Record<string, unknown>) => {
+      const mock = opts.model === REVIEWER_MODEL ? generateMock : generateTextMock;
+      return toGenerateTextResult(opts, (await mock(opts)) as FakeResponse | undefined, actual);
+    },
+    // opaque marker so tests can read back the schema handed to Output.object
+    Output: { ...actual.Output, object: (opts: unknown) => ({ __output: opts }) },
+  };
+});
 
-vi.mock("ai", () => ({
-  generateText: generateTextMock,
-  // Output.object({ schema }) — opaque marker the structurer uses. We don't
-  // need to validate its shape here; the structurer-only retry just hands it
-  // off to generateText (which is mocked). Returning a sentinel keeps the
-  // import call working without pulling in the real `ai` runtime.
-  Output: { object: (opts: unknown) => ({ __output: opts }) },
-}));
+function maxStepsOf(opts: Record<string, unknown>): number {
+  const stopWhen = opts.stopWhen as (o: { steps: unknown[] }) => boolean;
+  for (let n = 1; n <= 100; n++) {
+    if (stopWhen({ steps: Array.from({ length: n }) })) return n;
+  }
+  throw new Error("stopWhen never stopped");
+}
 
 const resolveJsonPromptInjectionMock = vi.fn(() => false);
 
@@ -38,13 +49,13 @@ vi.mock("../agent/model.js", () => ({
   resolveModelConfig: vi.fn(() => ({ type: "router", model: "test-model" })),
   resolveModelConfigWithOverride: vi.fn((model: string) => ({ type: "router", model })),
   resolveModel: vi.fn((config: { type: string; model?: string }) =>
-    config.type === "router" ? (config.model ?? "test-model") : "test-model",
+    config.type === "router" ? (config.model ?? REVIEWER_MODEL) : REVIEWER_MODEL,
   ),
   getModelDisplayName: vi.fn((config: { type: string; model?: string }) =>
     config.type === "router" ? (config.model ?? "test-model") : "test-model",
   ),
   resolveModelSettings: vi.fn(() => ({})),
-  resolveDefaultAgentOptions: vi.fn(() => undefined),
+  resolveProviderOptions: vi.fn(() => undefined),
   resolveJsonPromptInjection: resolveJsonPromptInjectionMock,
   supportsAnthropicCacheControl: vi.fn(() => false),
   applyModelConstraints: vi.fn((_config, settings) => settings),
@@ -52,16 +63,11 @@ vi.mock("../agent/model.js", () => ({
 
 const { runReview } = await import("../agent/review.js");
 
-class FakeMastraError extends Error {
+class TaggedError extends Error {
   id: string;
-  domain: string;
-  category: string;
   constructor(id: string, message: string) {
     super(message);
     this.id = id;
-    this.domain = "AGENT";
-    this.category = "SYSTEM";
-    this.name = "MastraError";
   }
 }
 
@@ -104,7 +110,7 @@ describe("runReview retry on STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", () => 
   it("retries once when first attempt throws STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", async () => {
     generateMock
       .mockRejectedValueOnce(
-        new FakeMastraError(
+        new TaggedError(
           "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
           "Structured output validation failed: root: Invalid input: expected object, received undefined",
         ),
@@ -124,8 +130,8 @@ describe("runReview retry on STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", () => 
     expect(generateMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not retry on a MastraError with a different id", async () => {
-    generateMock.mockRejectedValueOnce(new FakeMastraError("AGENT_STREAM_ERROR", "stream died"));
+  it("does not retry on a tagged error with a different id", async () => {
+    generateMock.mockRejectedValueOnce(new TaggedError("AGENT_STREAM_ERROR", "stream died"));
 
     await expect(runReview(config, "diff", prMetadata)).rejects.toThrow("stream died");
     expect(generateMock).toHaveBeenCalledTimes(1);
@@ -133,7 +139,7 @@ describe("runReview retry on STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", () => 
 
   it("throws when both the initial attempt and the retry fail the same way", async () => {
     generateMock.mockRejectedValue(
-      new FakeMastraError(
+      new TaggedError(
         "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
         "Structured output validation failed again",
       ),
@@ -147,7 +153,7 @@ describe("runReview retry on STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", () => 
 
   it("retries at most once (caps at 2 attempts, not more)", async () => {
     generateMock.mockRejectedValue(
-      new FakeMastraError("STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", "failure"),
+      new TaggedError("STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", "failure"),
     );
 
     await expect(runReview(config, "diff", prMetadata)).rejects.toThrow();
@@ -165,7 +171,7 @@ describe("runReview retry on STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", () => 
   it("propagates the original error unchanged when the retry also fails with a different error", async () => {
     generateMock
       .mockRejectedValueOnce(
-        new FakeMastraError(
+        new TaggedError(
           "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
           "first-attempt-validation-failure",
         ),
@@ -176,10 +182,10 @@ describe("runReview retry on STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", () => 
     expect(generateMock).toHaveBeenCalledTimes(2);
   });
 
-  it("retries when mastra silently returns response.object=undefined", async () => {
-    // mastra's prompt-injected JSON path can return object:undefined when the
-    // model emits text outside the JSON block instead of throwing. we should
-    // synthesize a validation error so the retry wrapper picks it up.
+  it("retries when the generation returns no object instead of throwing", async () => {
+    // the prompt-injected JSON path (and a run whose last step was not "stop")
+    // returns object:undefined instead of throwing. we should synthesize a
+    // validation error so the retry wrapper picks it up.
     generateMock
       .mockResolvedValueOnce({ object: undefined, usage: { totalTokens: 50 } })
       .mockResolvedValueOnce(makeValidResponse());
@@ -202,6 +208,9 @@ describe("runReview retry on STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", () => 
 
 describe("runReview structurer-only retry", () => {
   const validParsedReview = makeValidResponse().object;
+  // the structuring model's first pass over the prose produced no object; every
+  // structuring-model run has this primary call before the cheap retry
+  const primaryStructurerMiss = { usage: {} };
 
   beforeEach(() => {
     generateMock.mockReset();
@@ -209,14 +218,18 @@ describe("runReview structurer-only retry", () => {
     delete process.env.RUSTY_LLM_STRUCTURING_MODEL;
   });
 
+  afterEach(() => {
+    delete process.env.RUSTY_LLM_STRUCTURING_MODEL;
+    delete process.env.RUSTY_LLM_MAX_RETRIES;
+  });
+
   it("uses structurer-only retry on cached prose instead of rerunning the full agent", async () => {
     process.env.RUSTY_LLM_STRUCTURING_MODEL = "test-structurer";
     generateMock.mockResolvedValueOnce({
-      object: undefined,
       text: "the reviewer's prose that the structurer failed to parse",
       usage: { totalTokens: 100, inputTokens: 80, outputTokens: 20 },
     });
-    generateTextMock.mockResolvedValueOnce({
+    generateTextMock.mockResolvedValueOnce(primaryStructurerMiss).mockResolvedValueOnce({
       output: validParsedReview,
       usage: { totalTokens: 30, inputTokens: 25, outputTokens: 5 },
     });
@@ -224,29 +237,31 @@ describe("runReview structurer-only retry", () => {
     const result = await runReview(config, "diff", prMetadata);
 
     expect(result.recommendation).toBe("looks_good");
-    // expensive agent.generate called ONCE (not twice as the legacy path did)
+    // expensive reviewer generation called ONCE (not twice as the legacy path did)
     expect(generateMock).toHaveBeenCalledTimes(1);
-    // cheap generateObject call took over the retry
-    expect(generateTextMock).toHaveBeenCalledTimes(1);
+    // primary structuring call, then the cheap retry took over
+    expect(generateTextMock).toHaveBeenCalledTimes(2);
+    expect(generateTextMock.mock.calls[1][0].prompt).toBe(
+      "the reviewer's prose that the structurer failed to parse",
+    );
   });
 
   it("falls back to the full agent reroll when structurer-only retry also fails", async () => {
     process.env.RUSTY_LLM_STRUCTURING_MODEL = "test-structurer";
     generateMock
-      .mockResolvedValueOnce({
-        object: undefined,
-        text: "first-attempt prose",
-        usage: { totalTokens: 100 },
-      })
-      .mockResolvedValueOnce(makeValidResponse());
-    generateTextMock.mockRejectedValueOnce(new Error("structurer threw on retry"));
+      .mockResolvedValueOnce({ text: "first-attempt prose", usage: { totalTokens: 100 } })
+      .mockResolvedValueOnce({ text: "second-attempt prose", usage: { totalTokens: 100 } });
+    generateTextMock
+      .mockResolvedValueOnce(primaryStructurerMiss)
+      .mockRejectedValueOnce(new Error("structurer threw on retry"))
+      .mockResolvedValueOnce({ output: validParsedReview, usage: { totalTokens: 30 } });
 
     const result = await runReview(config, "diff", prMetadata);
 
     expect(result.recommendation).toBe("looks_good");
-    // structurer-only retry was attempted once
-    expect(generateTextMock).toHaveBeenCalledTimes(1);
-    // when it failed, existing expensive retry path kicked in
+    // first attempt: primary + one cheap retry; second attempt: primary succeeds
+    expect(generateTextMock).toHaveBeenCalledTimes(3);
+    // when the cheap retry failed, existing expensive retry path kicked in
     expect(generateMock).toHaveBeenCalledTimes(2);
   });
 
@@ -270,29 +285,27 @@ describe("runReview structurer-only retry", () => {
   it("does NOT attempt structurer-only retry when reviewer returned no prose", async () => {
     process.env.RUSTY_LLM_STRUCTURING_MODEL = "test-structurer";
     generateMock
-      .mockResolvedValueOnce({
-        object: undefined,
-        text: "",
-        usage: { totalTokens: 30 },
-      })
-      .mockResolvedValueOnce(makeValidResponse());
+      .mockResolvedValueOnce({ text: "", usage: { totalTokens: 30 } })
+      .mockResolvedValueOnce({ text: "prose", usage: { totalTokens: 100 } });
+    generateTextMock.mockResolvedValueOnce({ output: validParsedReview, usage: {} });
 
     const result = await runReview(config, "diff", prMetadata);
 
     expect(result.recommendation).toBe("looks_good");
-    // no prose → skip structurer-only retry, go straight to expensive reroll
-    expect(generateTextMock).not.toHaveBeenCalled();
+    // no prose → no structuring call at all for the first attempt, straight to
+    // the expensive reroll; the only structurer call is the reroll's primary
+    expect(generateTextMock).toHaveBeenCalledTimes(1);
+    expect(generateTextMock.mock.calls[0][0].prompt).toBe("prose");
     expect(generateMock).toHaveBeenCalledTimes(2);
   });
 
   it("merges structurer-only retry token usage into the reported total", async () => {
     process.env.RUSTY_LLM_STRUCTURING_MODEL = "test-structurer";
     generateMock.mockResolvedValueOnce({
-      object: undefined,
       text: "the reviewer's prose",
       usage: { totalTokens: 100, inputTokens: 80, outputTokens: 20 },
     });
-    generateTextMock.mockResolvedValueOnce({
+    generateTextMock.mockResolvedValueOnce(primaryStructurerMiss).mockResolvedValueOnce({
       output: validParsedReview,
       usage: { totalTokens: 30, inputTokens: 25, outputTokens: 5 },
     });
@@ -303,32 +316,67 @@ describe("runReview structurer-only retry", () => {
     expect(result.tokenCount).toBe(130);
   });
 
+  it("counts the primary structuring call's tokens too", async () => {
+    process.env.RUSTY_LLM_STRUCTURING_MODEL = "test-structurer";
+    generateMock.mockResolvedValueOnce({ text: "prose", usage: { totalTokens: 100 } });
+    generateTextMock.mockResolvedValueOnce({
+      output: validParsedReview,
+      usage: { totalTokens: 7 },
+    });
+
+    const result = await runReview(config, "diff", prMetadata);
+
+    expect(result.tokenCount).toBe(107);
+  });
+
   it("still throws when structurer-only retry succeeds with a non-schema-conforming object via the validation error path", async () => {
-    // edge case: generateObject succeeds but returns something incompatible.
-    // ai-sdk's generateObject validates against the schema and throws if it
-    // doesn't match, so this case is mostly defensive — but verifies that a
-    // throw from generateObject is caught and falls through to the full retry.
+    // verifies that a throw from the cheap structurer retry is caught and falls
+    // through to the full retry, and that the pass fails once both are spent.
     process.env.RUSTY_LLM_STRUCTURING_MODEL = "test-structurer";
     generateMock
-      .mockResolvedValueOnce({
-        object: undefined,
-        text: "prose",
-        usage: { totalTokens: 50 },
-      })
-      .mockResolvedValueOnce({
-        object: undefined,
-        text: "more prose",
-        usage: { totalTokens: 50 },
-      });
-    // both structurer retries fail (one per expensive attempt)
-    generateTextMock.mockRejectedValue(new Error("schema validation failed"));
+      .mockResolvedValueOnce({ text: "prose", usage: { totalTokens: 50 } })
+      .mockResolvedValueOnce({ text: "more prose", usage: { totalTokens: 50 } });
+    // per expensive attempt: primary structuring call misses, cheap retry throws
+    generateTextMock
+      .mockResolvedValueOnce(primaryStructurerMiss)
+      .mockRejectedValueOnce(new Error("schema validation failed"))
+      .mockResolvedValueOnce(primaryStructurerMiss)
+      .mockRejectedValueOnce(new Error("schema validation failed"));
 
     await expect(runReview(config, "diff", prMetadata)).rejects.toThrow(
       /structured output parser returned no object/,
     );
     // each expensive attempt should try the cheap structurer retry once
-    expect(generateTextMock).toHaveBeenCalledTimes(2);
+    expect(generateTextMock).toHaveBeenCalledTimes(4);
     expect(generateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("goes to the cheap retry when the primary structuring call fails schema validation", async () => {
+    process.env.RUSTY_LLM_STRUCTURING_MODEL = "test-structurer";
+    generateMock.mockResolvedValueOnce({ text: "prose", usage: { totalTokens: 100 } });
+    generateTextMock
+      .mockRejectedValueOnce(
+        new TaggedError("STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", "did not match schema"),
+      )
+      .mockResolvedValueOnce({ output: validParsedReview, usage: {} });
+
+    const result = await runReview(config, "diff", prMetadata);
+
+    expect(result.recommendation).toBe("looks_good");
+    expect(generateMock).toHaveBeenCalledTimes(1);
+    expect(generateTextMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not swallow a transient error from the primary structuring call", async () => {
+    process.env.RUSTY_LLM_MAX_RETRIES = "0";
+    process.env.RUSTY_LLM_STRUCTURING_MODEL = "test-structurer";
+    generateMock.mockResolvedValueOnce({ text: "prose", usage: { totalTokens: 100 } });
+    generateTextMock.mockRejectedValueOnce(
+      Object.assign(new Error("structurer 503"), { isRetryable: true }),
+    );
+
+    await expect(runReview(config, "diff", prMetadata)).rejects.toThrow("structurer 503");
+    expect(generateTextMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -338,24 +386,24 @@ describe("runReview jsonPromptInjection forwarding", () => {
     resolveJsonPromptInjectionMock.mockReset();
   });
 
-  it("forwards jsonPromptInjection=true into structuredOutput when resolver returns true", async () => {
+  it("requests no native output when the resolver picks prompt-injected JSON", async () => {
     resolveJsonPromptInjectionMock.mockReturnValueOnce(true);
     generateMock.mockResolvedValueOnce(makeValidResponse());
 
     await runReview(config, "diff", prMetadata);
 
-    const callArgs = generateMock.mock.calls[0][1];
-    expect(callArgs.structuredOutput.jsonPromptInjection).toBe(true);
+    const callArgs = generateMock.mock.calls[0][0];
+    expect(callArgs.output).toBeUndefined();
   });
 
-  it("forwards jsonPromptInjection=false into structuredOutput when resolver returns false", async () => {
+  it("requests native output when the resolver picks native structured output", async () => {
     resolveJsonPromptInjectionMock.mockReturnValueOnce(false);
     generateMock.mockResolvedValueOnce(makeValidResponse());
 
     await runReview(config, "diff", prMetadata);
 
-    const callArgs = generateMock.mock.calls[0][1];
-    expect(callArgs.structuredOutput.jsonPromptInjection).toBe(false);
+    const callArgs = generateMock.mock.calls[0][0];
+    expect(callArgs.output).toBeDefined();
   });
 });
 
@@ -372,7 +420,7 @@ describe("runReview ranked context", () => {
       rankedContext: "## Graph-ranked Context\n### src/helper.ts",
     });
 
-    expect(generateMock.mock.calls[0][0]).toContain("## Graph-ranked Context");
+    expect(generateMock.mock.calls[0][0].prompt).toContain("## Graph-ranked Context");
   });
 
   it("omits ranked context for skim calls", async () => {
@@ -392,7 +440,7 @@ describe("runReview ranked context", () => {
       rankedContext: "## Graph-ranked Context\n### src/helper.ts",
     });
 
-    expect(generateMock.mock.calls[0][0]).not.toContain("## Graph-ranked Context");
+    expect(generateMock.mock.calls[0][0].prompt).not.toContain("## Graph-ranked Context");
   });
 });
 
@@ -507,7 +555,7 @@ describe("runReview retry on transient LLM errors", () => {
     generateMock
       .mockRejectedValueOnce(new FakeApiCallError("upstream timeout", true))
       .mockRejectedValueOnce(
-        new FakeMastraError("STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", "validation failed once"),
+        new TaggedError("STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", "validation failed once"),
       )
       .mockResolvedValueOnce(makeValidResponse());
 
@@ -585,7 +633,7 @@ describe("RUSTY_LLM_MAX_STEPS", () => {
     generateMock.mockReset();
     generateMock.mockResolvedValueOnce(makeValidResponse());
     await runReview(config, "diff", prMetadata);
-    return generateMock.mock.calls[0][1] as Record<string, unknown>;
+    return generateMock.mock.calls[0][0] as Record<string, unknown>;
   }
 
   // probes well past the cap so a hook that fires late (or never) is caught too
@@ -607,8 +655,8 @@ describe("RUSTY_LLM_MAX_STEPS", () => {
   it("defaults to 20 steps with only the last one (step 19) forced tool-free when env is unset", async () => {
     const opts = await captureGenerateOpts();
 
-    // without an explicit maxSteps mastra silently stops at 5 steps with no forced answer
-    expect(opts.maxSteps).toBe(20);
+    // the step cap is the only bound on the tool loop, so it must always be set
+    expect(maxStepsOf(opts)).toBe(20);
     expect(forcedSteps(opts)).toEqual(range(19, 40));
   });
 
@@ -616,7 +664,7 @@ describe("RUSTY_LLM_MAX_STEPS", () => {
     process.env.RUSTY_LLM_MAX_STEPS = "5";
     const opts = await captureGenerateOpts();
 
-    expect(opts.maxSteps).toBe(5);
+    expect(maxStepsOf(opts)).toBe(5);
     expect(forcedSteps(opts)).toEqual(range(4, 40));
   });
 
@@ -624,7 +672,7 @@ describe("RUSTY_LLM_MAX_STEPS", () => {
     process.env.RUSTY_LLM_MAX_STEPS = "30";
     const opts = await captureGenerateOpts();
 
-    expect(opts.maxSteps).toBe(30);
+    expect(maxStepsOf(opts)).toBe(30);
     expect(forcedSteps(opts)).toEqual(range(29, 40));
   });
 
@@ -640,7 +688,7 @@ describe("RUSTY_LLM_MAX_STEPS", () => {
     process.env.RUSTY_LLM_MAX_STEPS = "1";
     const opts = await captureGenerateOpts();
 
-    expect(opts.maxSteps).toBe(1);
+    expect(maxStepsOf(opts)).toBe(1);
     expect(forcedSteps(opts)).toEqual(range(0, 40));
   });
 
@@ -648,7 +696,7 @@ describe("RUSTY_LLM_MAX_STEPS", () => {
     process.env.RUSTY_LLM_MAX_STEPS = "3.7";
     const opts = await captureGenerateOpts();
 
-    expect(opts.maxSteps).toBe(3);
+    expect(maxStepsOf(opts)).toBe(3);
     expect(forcedSteps(opts)).toEqual(range(2, 40));
   });
 
@@ -658,7 +706,7 @@ describe("RUSTY_LLM_MAX_STEPS", () => {
       process.env.RUSTY_LLM_MAX_STEPS = raw;
       const opts = await captureGenerateOpts();
 
-      expect(opts.maxSteps).toBe(20);
+      expect(maxStepsOf(opts)).toBe(20);
       expect(forcedSteps(opts)).toEqual(range(19, 40));
     },
   );
@@ -667,35 +715,47 @@ describe("RUSTY_LLM_MAX_STEPS", () => {
 describe("RUSTY_LLM_STRUCTURING_MODEL", () => {
   beforeEach(() => {
     generateMock.mockReset();
+    generateTextMock.mockReset();
     resolveJsonPromptInjectionMock.mockReset();
     resolveJsonPromptInjectionMock.mockImplementation(() => false);
     delete process.env.RUSTY_LLM_STRUCTURING_MODEL;
   });
 
-  it("does not pass structuredOutput.model when env is unset", async () => {
-    generateMock.mockResolvedValueOnce(makeValidResponse());
-
-    await runReview(config, "diff", prMetadata);
-
-    const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
-    const structured = opts.structuredOutput as Record<string, unknown>;
-    expect(structured.model).toBeUndefined();
+  afterEach(() => {
+    delete process.env.RUSTY_LLM_STRUCTURING_MODEL;
   });
 
-  it("passes structuring model into structuredOutput.model when env is set", async () => {
-    process.env.RUSTY_LLM_STRUCTURING_MODEL = "azure-openai/gpt-5.4-mini";
+  it("does not call a structuring model when env is unset", async () => {
     generateMock.mockResolvedValueOnce(makeValidResponse());
 
     await runReview(config, "diff", prMetadata);
 
-    const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
-    const structured = opts.structuredOutput as Record<string, unknown>;
-    expect(structured.model).toBe("azure-openai/gpt-5.4-mini");
+    expect(generateTextMock).not.toHaveBeenCalled();
+    const opts = generateMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(opts.output).toBeDefined();
+  });
+
+  it("hands the reviewer's prose to the structuring model when env is set", async () => {
+    process.env.RUSTY_LLM_STRUCTURING_MODEL = "azure-openai/gpt-5.4-mini";
+    generateMock.mockResolvedValueOnce({ text: "reviewer prose", usage: { totalTokens: 100 } });
+    generateTextMock.mockResolvedValueOnce(makeValidResponse());
+
+    await runReview(config, "diff", prMetadata);
+
+    // the reviewer writes prose with tools and no schema; the structurer gets the schema
+    const reviewerOpts = generateMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(reviewerOpts.output).toBeUndefined();
+    expect(reviewerOpts.tools).toBeDefined();
+    const structurerOpts = generateTextMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(structurerOpts.model).toBe("azure-openai/gpt-5.4-mini");
+    expect(structurerOpts.prompt).toBe("reviewer prose");
+    expect(structurerOpts.output).toBeDefined();
   });
 
   it("evaluates jsonPromptInjection against the structuring model when set", async () => {
     process.env.RUSTY_LLM_STRUCTURING_MODEL = "azure-openai/gpt-5.4-mini";
     generateMock.mockResolvedValueOnce(makeValidResponse());
+    generateTextMock.mockResolvedValueOnce(makeValidResponse());
 
     await runReview(config, "diff", prMetadata);
 
@@ -724,9 +784,7 @@ describe("RUSTY_LLM_STRUCTURING_MODEL", () => {
 
     await runReview(config, "diff", prMetadata);
 
-    const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
-    const structured = opts.structuredOutput as Record<string, unknown>;
-    expect(structured.model).toBeUndefined();
+    expect(generateTextMock).not.toHaveBeenCalled();
   });
 });
 
@@ -741,7 +799,7 @@ describe("RUSTY_LOG_AGENT_STEPS", () => {
 
     await runReview(config, "diff", prMetadata);
 
-    const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
+    const opts = generateMock.mock.calls[0][0] as Record<string, unknown>;
     expect(opts.onStepFinish).toBeUndefined();
   });
 
@@ -751,7 +809,7 @@ describe("RUSTY_LOG_AGENT_STEPS", () => {
 
     await runReview(config, "diff", prMetadata);
 
-    const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
+    const opts = generateMock.mock.calls[0][0] as Record<string, unknown>;
     expect(opts.onStepFinish).toBeUndefined();
   });
 
@@ -761,7 +819,7 @@ describe("RUSTY_LOG_AGENT_STEPS", () => {
 
     await runReview(config, "diff", prMetadata);
 
-    const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
+    const opts = generateMock.mock.calls[0][0] as Record<string, unknown>;
     expect(opts.onStepFinish).toBeTypeOf("function");
   });
 
@@ -771,7 +829,7 @@ describe("RUSTY_LOG_AGENT_STEPS", () => {
 
     await runReview(config, "diff", prMetadata);
 
-    const opts = generateMock.mock.calls[0][1] as Record<string, unknown>;
+    const opts = generateMock.mock.calls[0][0] as Record<string, unknown>;
     const onStepFinish = opts.onStepFinish as (step: unknown) => void;
 
     // exercising the callback should not throw on any of: well-shaped step,
@@ -1011,7 +1069,7 @@ describe("runReview step log attempts", () => {
 
   it("restarts stepNumber at 0 and bumps attempt on a transient retry", async () => {
     const step = { finishReason: "tool-calls", toolCalls: [{}], usage: {}, warnings: [] };
-    generateMock.mockImplementation(async (_msg: string, opts: Record<string, unknown>) => {
+    generateMock.mockImplementation(async (opts: Record<string, unknown>) => {
       const onStepFinish = opts.onStepFinish as (s: unknown) => void;
       onStepFinish(step);
       onStepFinish(step);
@@ -1053,7 +1111,7 @@ describe("runReview scope creep", () => {
 
     const result = await runReview({ ...config, flagScopeCreep: true }, "diff", prMetadata);
 
-    const schema = generateMock.mock.calls[0][1].structuredOutput.schema;
+    const schema = generateMock.mock.calls[0][0].output.__output.schema;
     expect(schema.shape).toHaveProperty("scopeCreep");
     expect(result.scopeCreep).toEqual([{ file: "a.ts", description: "unrelated rename" }]);
   });
@@ -1063,7 +1121,7 @@ describe("runReview scope creep", () => {
 
     const result = await runReview(config, "diff", prMetadata);
 
-    const schema = generateMock.mock.calls[0][1].structuredOutput.schema;
+    const schema = generateMock.mock.calls[0][0].output.__output.schema;
     expect(schema.shape).not.toHaveProperty("scopeCreep");
     expect(result.scopeCreep).toBeUndefined();
   });
@@ -1084,7 +1142,7 @@ describe("runReview scope creep", () => {
       tier: "skim",
     });
 
-    const schema = generateMock.mock.calls[0][1].structuredOutput.schema;
+    const schema = generateMock.mock.calls[0][0].output.__output.schema;
     expect(schema.shape).not.toHaveProperty("scopeCreep");
   });
 });
@@ -1139,7 +1197,7 @@ describe("runReview pass time budget", () => {
 
     const outcome = track(runReview(config, "diff", prMetadata));
     await vi.advanceTimersByTimeAsync(0);
-    const signal = generateMock.mock.calls[0][1].abortSignal as AbortSignal;
+    const signal = generateMock.mock.calls[0][0].abortSignal as AbortSignal;
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(signal.aborted).toBe(false);
 
@@ -1157,7 +1215,7 @@ describe("runReview pass time budget", () => {
           setTimeout(
             () =>
               reject(
-                new FakeMastraError(
+                new TaggedError(
                   "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
                   "Structured output validation failed",
                 ),
@@ -1228,5 +1286,47 @@ describe("runReview pass time budget", () => {
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect((outcome.error as { id?: string }).id).toBe("REVIEW_PASS_TIMEOUT");
+  });
+});
+
+describe("runReview with a local checkout", () => {
+  beforeEach(() => {
+    generateMock.mockReset();
+  });
+
+  function systemText(opts: Record<string, unknown>): string {
+    return (opts.system as { content: string }[]).map((m) => m.content).join("\n");
+  }
+
+  it("offers both tools from the checkout without a provider or sourceRef and drops the pre-merge note", async () => {
+    generateMock.mockResolvedValueOnce(makeValidResponse());
+    const checkout = { approximate: false, grep: vi.fn(), readFile: vi.fn() } as any;
+
+    await runReview(config, "diff", prMetadata, undefined, { checkout });
+
+    const opts = generateMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(Object.keys(opts.tools as object).sort()).toEqual(["getFileContext", "searchCode"]);
+    expect(systemText(opts)).not.toContain("may reflect pre-merge content");
+  });
+
+  it("keeps the pre-merge note for provider-backed tools", async () => {
+    generateMock.mockResolvedValueOnce(makeValidResponse());
+    const provider = { searchCode: vi.fn(), getFileContent: vi.fn() } as any;
+
+    await runReview(config, "diff", prMetadata, undefined, { provider, sourceRef: "feat" });
+
+    const opts = generateMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(Object.keys(opts.tools as object).sort()).toEqual(["getFileContext", "searchCode"]);
+    expect(systemText(opts)).toContain("may reflect pre-merge content");
+  });
+
+  it("still gives the skim tier no tools when a checkout exists", async () => {
+    generateMock.mockResolvedValueOnce(makeValidResponse());
+    const checkout = { approximate: false, grep: vi.fn(), readFile: vi.fn() } as any;
+
+    await runReview(config, "diff", prMetadata, undefined, { checkout, tier: "skim" });
+
+    const opts = generateMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(Object.keys((opts.tools as object | undefined) ?? {})).toEqual([]);
   });
 });

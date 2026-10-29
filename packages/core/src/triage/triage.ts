@@ -1,17 +1,14 @@
-import { Agent } from "@mastra/core/agent";
 import type { FilePatch, TriageResult, TriageFileResult } from "../types.js";
 import type { OpenGrepFinding } from "../opengrep/types.js";
 import { TriageOutputSchema } from "./schema.js";
 import { buildTriageSystemPrompt, buildTriageUserMessage } from "./prompt.js";
 import {
   resolveTriageModelConfig,
-  resolveModel,
   getModelDisplayName,
   resolveModelSettings,
-  resolveDefaultAgentOptions,
-  resolveJsonPromptInjection,
   applyModelConstraints,
 } from "../agent/model.js";
+import { generateStructured } from "../agent/generate.js";
 import { normalizePath } from "../diff/normalize-path.js";
 import { countTokens } from "../diff/compress.js";
 import { logger } from "../logger.js";
@@ -113,24 +110,18 @@ export async function runTriage(
     overflowFiles = applyOverflowDefaults(patches, triageablePatches);
   }
 
-  const defaultOptions = resolveDefaultAgentOptions(modelConfig);
-  const agent = new Agent({
-    id: "triage-agent",
-    name: "Rusty Bot Triage",
-    instructions: () => systemPrompt,
-    model: () => resolveModel(modelConfig),
-    ...(defaultOptions && { defaultOptions }),
-  });
-
   const triageMessage = buildTriageUserMessage(triageablePatches);
   const modelSettings = applyModelConstraints(modelConfig, resolveModelSettings("triage"));
-  const jsonPromptInjection = resolveJsonPromptInjection(modelConfig);
-  const response = await agent.generate(triageMessage, {
-    structuredOutput: { schema: TriageOutputSchema, jsonPromptInjection },
-    ...(Object.keys(modelSettings).length > 0 && { modelSettings }),
+  const response = await generateStructured({
+    modelConfig,
+    system: systemPrompt,
+    prompt: triageMessage,
+    schema: TriageOutputSchema,
+    settings: modelSettings,
   });
 
   const parsed = response.object;
+  if (!parsed) throw new Error("triage returned no parseable object");
   const tokenCount = response.usage.totalTokens ?? 0;
 
   // merge triage results with overflow defaults

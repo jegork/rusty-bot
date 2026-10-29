@@ -35,7 +35,6 @@ export type {
 } from "./types.js";
 
 export { SearchUnavailableError, type SearchUnavailableReason } from "./agent/search-errors.js";
-export { getMastra, getStorage } from "./mastra.js";
 export { logger, flushLogger } from "./logger.js";
 export { configureGlobalHttp } from "./http-config.js";
 export * from "./formatter/index.js";
@@ -49,3 +48,4 @@ export * from "./description/index.js";
 export * from "./title/index.js";
 export { fetchConventionFile } from "./convention-file.js";
 export * from "./analysis/raw-findings.js";
+export * from "./repo/index.js";

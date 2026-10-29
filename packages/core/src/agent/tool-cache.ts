@@ -1,7 +1,38 @@
-import type { GitProvider } from "../types.js";
+import type { RepoCheckout } from "../repo/checkout.js";
+import type { CodeSearchResult, GitProvider } from "../types.js";
 import { SearchUnavailableError } from "./search-errors.js";
 
 const DEFAULT_SEARCH_COOLDOWN_MS = 60_000;
+
+// "pr-head" searches the PR's own code on disk; "remote" goes through the
+// platform API, whose search only indexes the default branch.
+export type SearchScope = "pr-head" | "remote";
+
+export interface CodeSource {
+  scope: SearchScope;
+  /** true when a pr-head source is the merge commit rather than the PR head itself */
+  approximate: boolean;
+  searchCode(query: string): Promise<CodeSearchResult[]>;
+  getFileContent(path: string): Promise<string | null>;
+}
+
+export function providerCodeSource(provider: GitProvider, ref: string): CodeSource {
+  return {
+    scope: "remote",
+    approximate: false,
+    searchCode: (query) => provider.searchCode(query),
+    getFileContent: (path) => provider.getFileContent(path, ref),
+  };
+}
+
+export function checkoutCodeSource(checkout: RepoCheckout): CodeSource {
+  return {
+    scope: "pr-head",
+    approximate: checkout.approximate,
+    searchCode: (query) => checkout.grep(query),
+    getFileContent: (path) => checkout.readFile(path),
+  };
+}
 
 export class ToolCache {
   private searchCache = new Map<
@@ -11,10 +42,13 @@ export class ToolCache {
   private fileCache = new Map<string, Promise<{ content: string | null }>>();
   private searchUnavailableUntil = 0;
 
-  constructor(
-    private provider: GitProvider,
-    private ref: string,
-  ) {}
+  readonly scope: SearchScope;
+  readonly approximate: boolean;
+
+  constructor(private source: CodeSource) {
+    this.scope = source.scope;
+    this.approximate = source.approximate;
+  }
 
   searchCode(query: string) {
     const remainingMs = this.searchUnavailableUntil - Date.now();
@@ -23,7 +57,7 @@ export class ToolCache {
     }
     const existing = this.searchCache.get(query);
     if (existing) return existing;
-    const p = this.provider
+    const p = this.source
       .searchCode(query)
       .then((results) => ({ results, count: results.length }))
       .catch((err: unknown) => {
@@ -42,7 +76,7 @@ export class ToolCache {
   getFileContent(path: string) {
     const existing = this.fileCache.get(path);
     if (existing) return existing;
-    const p = this.provider.getFileContent(path, this.ref).then((content) => ({ content }));
+    const p = this.source.getFileContent(path).then((content) => ({ content }));
     this.fileCache.set(path, p);
     return p;
   }

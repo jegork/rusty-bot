@@ -25,6 +25,7 @@ jobs:
   review:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: jegork/rusty-bot@v1
         env:
           RUSTY_LLM_MODEL: anthropic/claude-sonnet-4-20250514

@@ -1,13 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type * as AiModule from "ai";
+import { toGenerateTextResult, type FakeResponse } from "./fake-generate-text.js";
 import type { FilePatch, Finding } from "../types.js";
 
 const generateMock = vi.fn();
 
-vi.mock("@mastra/core/agent", () => ({
-  Agent: vi.fn().mockImplementation(function () {
-    return { generate: generateMock };
-  }),
-}));
+vi.mock("ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof AiModule>();
+  return {
+    ...actual,
+    generateText: async (opts: Record<string, unknown>) =>
+      toGenerateTextResult(opts, (await generateMock(opts)) as FakeResponse | undefined, actual),
+    // opaque marker so tests can read back the schema handed to Output.object
+    Output: { ...actual.Output, object: (opts: unknown) => ({ __output: opts }) },
+  };
+});
 
 vi.mock("../agent/model.js", () => ({
   resolveModelConfig: vi.fn(() => ({ type: "router", model: "test-model" })),
@@ -15,13 +22,12 @@ vi.mock("../agent/model.js", () => ({
   resolveModel: vi.fn(() => "test-model"),
   getModelDisplayName: vi.fn(() => "test-model"),
   resolveModelSettings: vi.fn(() => ({})),
-  resolveDefaultAgentOptions: vi.fn(() => undefined),
+  resolveProviderOptions: vi.fn(() => undefined),
   resolveJsonPromptInjection: vi.fn(() => false),
   applyModelConstraints: vi.fn((_config, settings) => settings),
 }));
 
 const { judgeFindings } = await import("../agent/judge.js");
-const { Agent } = await import("@mastra/core/agent");
 
 const PATCHES: FilePatch[] = [
   {
@@ -69,7 +75,7 @@ describe("judge prompt hardening", () => {
 
   it("keeps the diff excerpt and suggested fix inside their untrusted wrappers", async () => {
     await judgeFindings([finding], PATCHES, config);
-    const message = generateMock.mock.calls[0][0] as string;
+    const message = (generateMock.mock.calls[0][0] as { prompt: string }).prompt;
 
     expect(message.match(/<\/untrusted-diff-context>/g)).toHaveLength(1);
     expect(message.match(/<\/untrusted-suggested-fix>/g)).toHaveLength(1);
@@ -87,7 +93,7 @@ describe("judge prompt hardening", () => {
 
   it("system prompt carries the untrusted-data rule", async () => {
     await judgeFindings([finding], PATCHES, config);
-    const cfg = vi.mocked(Agent).mock.calls.at(-1)?.[0];
-    expect((cfg?.instructions as () => string)()).toContain("<untrusted-*>");
+    const call = generateMock.mock.calls.at(-1)?.[0] as { system: { content: string }[] };
+    expect(call.system[0].content).toContain("<untrusted-*>");
   });
 });

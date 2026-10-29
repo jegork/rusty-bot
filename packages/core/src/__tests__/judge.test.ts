@@ -1,14 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type * as AiModule from "ai";
+import { toGenerateTextResult, type FakeResponse } from "./fake-generate-text.js";
 import type { FilePatch, Finding, ReviewResult } from "../types.js";
 import { logger } from "../logger.js";
 
 const generateMock = vi.fn();
 
-vi.mock("@mastra/core/agent", () => ({
-  Agent: vi.fn().mockImplementation(function () {
-    return { generate: generateMock };
-  }),
-}));
+vi.mock("ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof AiModule>();
+  return {
+    ...actual,
+    generateText: async (opts: Record<string, unknown>) =>
+      toGenerateTextResult(opts, (await generateMock(opts)) as FakeResponse | undefined, actual),
+    // opaque marker so tests can read back the schema handed to Output.object
+    Output: { ...actual.Output, object: (opts: unknown) => ({ __output: opts }) },
+  };
+});
 
 const resolveJsonPromptInjectionMock = vi.fn(() => false);
 
@@ -22,7 +29,7 @@ vi.mock("../agent/model.js", () => ({
     config.type === "router" ? (config.model ?? "test-model") : "test-model",
   ),
   resolveModelSettings: vi.fn(() => ({})),
-  resolveDefaultAgentOptions: vi.fn(() => undefined),
+  resolveProviderOptions: vi.fn(() => undefined),
   resolveJsonPromptInjection: resolveJsonPromptInjectionMock,
   applyModelConstraints: vi.fn((_config, settings) => settings),
 }));
@@ -200,7 +207,6 @@ describe("judgeFindings", () => {
   });
 
   it("uses an adversarial judge prompt", async () => {
-    const { Agent } = await import("@mastra/core/agent");
     const findings = [makeFinding()];
 
     generateMock.mockResolvedValueOnce({
@@ -212,9 +218,8 @@ describe("judgeFindings", () => {
 
     await judgeFindings(findings, PATCHES, enabledConfig);
 
-    const agentConfig = vi.mocked(Agent).mock.calls.at(-1)?.[0];
-    const instructions = agentConfig?.instructions as (() => string) | undefined;
-    const prompt = instructions?.();
+    const call = generateMock.mock.calls.at(-1)?.[0] as { system: { content: string }[] };
+    const prompt = call.system[0].content;
     expect(prompt).toContain("Default to rejection");
     expect(prompt).toContain("missing-test complaints");
     expect(prompt).toContain("severity-inflated findings");
@@ -416,7 +421,6 @@ describe("judgeFindings", () => {
   });
 
   it("respects custom model override", async () => {
-    const { Agent } = await import("@mastra/core/agent");
     const findings = [makeFinding()];
 
     generateMock.mockResolvedValueOnce({
@@ -432,10 +436,8 @@ describe("judgeFindings", () => {
       model: "anthropic/claude-haiku",
     });
 
-    const agentConfig = vi.mocked(Agent).mock.calls.at(-1)?.[0];
-    expect(agentConfig?.model).toEqual(expect.any(Function));
-    const resolveAgentModel = agentConfig?.model as (() => unknown) | undefined;
-    expect(resolveAgentModel?.()).toBe("anthropic/claude-haiku");
+    const call = generateMock.mock.calls.at(-1)?.[0] as { model: unknown };
+    expect(call.model).toBe("anthropic/claude-haiku");
   });
 
   it("routes override model through provider resolution (azure-openai prefix)", async () => {
@@ -459,8 +461,7 @@ describe("judgeFindings", () => {
     });
 
     // override must flow through the provider resolution helper, otherwise
-    // azure-openai/ strings get handed to the mastra router and fail with
-    // "Could not find config for provider azure-openai"
+    // azure-openai/ strings are treated as an unknown router prefix
     expect(resolveWithOverrideSpy).toHaveBeenCalledWith("azure-openai/gpt-5.4-mini");
   });
 
@@ -805,7 +806,7 @@ describe("judgeFindings jsonPromptInjection forwarding", () => {
     resolveJsonPromptInjectionMock.mockReset();
   });
 
-  it("forwards jsonPromptInjection=true into structuredOutput when resolver returns true", async () => {
+  it("requests no native output when the resolver picks prompt-injected JSON", async () => {
     resolveJsonPromptInjectionMock.mockReturnValueOnce(true);
     generateMock.mockResolvedValueOnce({
       object: { evaluations: [{ index: 0, confidence: 9, reasoning: "ok" }] },
@@ -814,11 +815,11 @@ describe("judgeFindings jsonPromptInjection forwarding", () => {
 
     await judgeFindings([makeFinding()], PATCHES, { enabled: true, threshold: 6 });
 
-    const callArgs = generateMock.mock.calls[0][1];
-    expect(callArgs.structuredOutput.jsonPromptInjection).toBe(true);
+    const callArgs = generateMock.mock.calls[0][0];
+    expect(callArgs.output).toBeUndefined();
   });
 
-  it("forwards jsonPromptInjection=false into structuredOutput when resolver returns false", async () => {
+  it("requests native output when the resolver picks native structured output", async () => {
     resolveJsonPromptInjectionMock.mockReturnValueOnce(false);
     generateMock.mockResolvedValueOnce({
       object: { evaluations: [{ index: 0, confidence: 9, reasoning: "ok" }] },
@@ -827,8 +828,8 @@ describe("judgeFindings jsonPromptInjection forwarding", () => {
 
     await judgeFindings([makeFinding()], PATCHES, { enabled: true, threshold: 6 });
 
-    const callArgs = generateMock.mock.calls[0][1];
-    expect(callArgs.structuredOutput.jsonPromptInjection).toBe(false);
+    const callArgs = generateMock.mock.calls[0][0];
+    expect(callArgs.output).toBeDefined();
   });
 });
 
@@ -1032,7 +1033,7 @@ describe("judge formatter", () => {
     const finding = makeFinding({ file: "src/app.ts", line: 1 });
     await judgeFindings([finding], PATCHES, { enabled: true, threshold: 6 });
 
-    const userMessage = generateMock.mock.calls[0][0] as string;
+    const userMessage = (generateMock.mock.calls[0][0] as { prompt: string }).prompt;
     expect(userMessage).toContain("## Findings to evaluate");
     expect(userMessage).toContain("### Finding 0");
     expect(userMessage).toContain("- **Diff context:**");
@@ -1050,7 +1051,7 @@ describe("judge formatter", () => {
     const finding = makeFinding({ file: "ghost.ts", line: 12 });
     await judgeFindings([finding], PATCHES, { enabled: true, threshold: 6 });
 
-    const userMessage = generateMock.mock.calls[0][0] as string;
+    const userMessage = (generateMock.mock.calls[0][0] as { prompt: string }).prompt;
     expect(userMessage).toContain("no diff excerpt available");
   });
 });

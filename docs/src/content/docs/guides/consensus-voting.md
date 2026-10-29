@@ -112,7 +112,7 @@ Consensus uses `Promise.allSettled` so a single flaky pass does not fail the who
 
 ## Structured output compatibility
 
-Some models in the Balanced and Budget stacks above (notably `requesty/minimaxi/MiniMax-M2.7`) do not support native `response_format: json_schema` — Requesty's `json_schema` only proxies for OpenAI, Anthropic, Google, Moonshot, and Fireworks. Rusty Bot detects this automatically and falls back to Mastra's `jsonPromptInjection: true` (schema injected into the system prompt; JSON parsed from the text response).
+Some models in the Balanced and Budget stacks above (notably `requesty/minimaxi/MiniMax-M2.7`) do not support native `response_format: json_schema` — Requesty's `json_schema` only proxies for OpenAI, Anthropic, Google, Moonshot, and Fireworks. Rusty Bot detects this automatically and falls back to prompt-injected JSON (the JSON Schema is appended to the system prompt and the JSON object is parsed from the text response).
 
 Override the default with `RUSTY_LLM_JSON_PROMPT_INJECTION` (force prompt injection) or `RUSTY_LLM_NATIVE_STRUCTURED_OUTPUT` (force native `json_schema`). Both accept CSV with trailing-`*` prefix wildcards. See the README's _Structured Output Compatibility_ section for details.
 

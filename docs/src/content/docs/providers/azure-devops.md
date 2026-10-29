@@ -40,6 +40,8 @@ steps:
       RUSTY_FAIL_ON_CRITICAL: "true"
 ```
 
+The pipeline's default `checkout: self` is used automatically: the reviewer searches the PR's code with `git grep` on the PR head commit, fetching that commit with `$(System.AccessToken)` when the shallow merge-commit checkout lacks it. `fetchDepth: 0` is **not** required.
+
 ## LLM provider
 
 **Direct API key** — set `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY`) as a pipeline variable in Azure DevOps and pass it through `env:` as shown above.

@@ -1,6 +1,4 @@
-import { Agent } from "@mastra/core/agent";
-import type { ToolsInput } from "@mastra/core/agent";
-import { generateText, Output } from "ai";
+import type { ToolSet } from "ai";
 import type { z } from "zod";
 import {
   ReviewOutputSchema,
@@ -11,15 +9,20 @@ import { buildSystemPrompt, buildUserMessage, buildCachedSystemMessages } from "
 import {
   resolveModelConfig,
   resolveModelConfigWithOverride,
-  resolveModel,
   getModelDisplayName,
   resolveModelSettings,
-  resolveDefaultAgentOptions,
-  resolveJsonPromptInjection,
   supportsAnthropicCacheControl,
   applyModelConstraints,
 } from "./model.js";
 import type { ModelConfig, ModelSettings } from "./model.js";
+import {
+  generateProse,
+  generateStructured,
+  STRUCTURED_OUTPUT_VALIDATION_ERROR_ID,
+  type ProseResult,
+  type StructuredCall,
+  type StructuredResult,
+} from "./generate.js";
 import type {
   ReviewConfig,
   PRMetadata,
@@ -29,13 +32,12 @@ import type {
   PriorReviewContext,
 } from "../types.js";
 import type { OpenGrepFinding } from "../opengrep/types.js";
+import type { RepoCheckout } from "../repo/checkout.js";
 import { createSearchCodeTool, createGetFileContextTool } from "./tools.js";
-import { ToolCache } from "./tool-cache.js";
+import { ToolCache, checkoutCodeSource, providerCodeSource } from "./tool-cache.js";
 import { logger } from "../logger.js";
 
 const log = logger.child({ module: "review" });
-
-const STRUCTURED_OUTPUT_VALIDATION_ERROR_ID = "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED";
 
 const EMPTY_PROVIDER_RESPONSE_ERROR_ID = "EMPTY_PROVIDER_RESPONSE";
 
@@ -117,12 +119,12 @@ function isEmptyProviderResponse(r: unknown): boolean {
 }
 
 // AI SDK marks transient upstream failures (headers timeout, 5xx, connection reset)
-// with isRetryable=true. Mastra's internal pRetry handles per-request retries; this
+// with isRetryable=true. generateText's own maxRetries handles per-request retries; this
 // catches the case where its retries exhausted within a single tight timeout window
 // and gives the caller a fresh request budget.
 /** retryable HTTP statuses for upstream LLM calls — 408 (timeout), 425 (early
  * data), 429 (rate limit), and the 5xx server-side band. matches the ai-sdk's
- * APICallError convention so other providers downstream of mastra get the
+ * APICallError convention so providers that don't set isRetryable get the
  * same treatment. */
 function isRetryableStatus(status: unknown): boolean {
   if (typeof status !== "number") return false;
@@ -164,11 +166,10 @@ function readMaxTransientRetries(): number {
 const DEFAULT_LLM_MAX_STEPS = 20;
 
 // caps how many tool-use rounds an agent can run before it is forced to
-// produce a final answer. unset/invalid = 20. there is always a cap: without
-// an explicit maxSteps mastra stops after 5 steps with no forced final answer,
-// so a model that makes one tool call per step ends mid-investigation with
-// finishReason="tool-calls" and zero text — defeating the structured-output
-// contract.
+// produce a final answer. unset/invalid = 20. the cap is the only bound on the
+// tool loop (it becomes stepCountIs(maxSteps)), and the last allowed step is
+// forced tool-free by prepareStep so the run ends with text instead of
+// finishReason="tool-calls" and zero text.
 function readLlmMaxSteps(): number {
   const raw = process.env.RUSTY_LLM_MAX_STEPS;
   if (raw === undefined || raw === "") return DEFAULT_LLM_MAX_STEPS;
@@ -251,8 +252,8 @@ function buildStepLogger(
   };
 }
 
-// when set, mastra runs a separate structuring agent on top of the main
-// review agent's output: the main agent produces freeform prose (with tools
+// when set, a separate structuring call runs on top of the main review
+// agent's output: the main agent produces freeform prose (with tools
 // available, no schema pressure) and a cheap structuring model translates
 // that prose into the schema-conformant JSON. eliminates the entire class of
 // `finishReason: "tool-calls"` failures because the main agent isn't on the
@@ -323,6 +324,40 @@ interface StructurerRetryResult {
   usage?: StructurerRetryUsage;
 }
 
+const STRUCTURER_PROMPT =
+  "Convert the following code review into the requested JSON structure. " +
+  "Preserve every finding, observation, and field exactly as written.";
+
+/**
+ * reviewer writes prose with tools, then the structuring model turns it into
+ * the schema. an empty transcript skips the structurer: there is nothing to
+ * convert, and its tokens would hide an empty completion from
+ * isEmptyProviderResponse. a structurer that produces no valid object leaves
+ * `object` undefined so the caller's cheap structurer-only retry gets its turn.
+ */
+async function generateProseThenStructure(
+  call: Omit<StructuredCall<unknown>, "schema">,
+  schema: z.ZodType,
+  structuringConfig: ModelConfig,
+): Promise<StructuredResult<unknown>> {
+  const prose: ProseResult = await generateProse(call);
+  if (prose.text.length === 0) return { ...prose, object: undefined };
+  try {
+    const structured = await generateStructured({
+      modelConfig: structuringConfig,
+      system: STRUCTURER_PROMPT,
+      prompt: prose.text,
+      schema,
+      settings: {},
+      ...(call.abortSignal && { abortSignal: call.abortSignal }),
+    });
+    return augmentResponseWithStructurerRetry(prose, structured);
+  } catch (err) {
+    if (!isStructuredOutputValidationError(err)) throw err;
+    return { ...prose, object: undefined };
+  }
+}
+
 /**
  * Retry just the structuring step on the reviewer's prose. The agent
  * already produced `prose` (the expensive part — multi-step tool-using
@@ -342,14 +377,14 @@ async function retryStructurerOnProse(
   bindings: Record<string, unknown>,
 ): Promise<StructurerRetryResult | null> {
   try {
-    const result = await generateText({
-      model: resolveModel(structuringConfig),
-      output: Output.object({ schema }),
-      prompt:
-        "Convert the following code review into the requested JSON structure. " +
-        "Preserve every finding, observation, and field exactly as written.\n\n" +
-        prose,
+    const result = await generateStructured({
+      modelConfig: structuringConfig,
+      system: STRUCTURER_PROMPT,
+      prompt: prose,
+      schema,
+      settings: {},
     });
+    if (result.object === undefined) throw new Error("structurer returned no parseable object");
     log.info(
       {
         ...bindings,
@@ -357,7 +392,7 @@ async function retryStructurerOnProse(
       },
       "structurer-only retry succeeded after primary returned no object",
     );
-    return { object: result.output, usage: result.usage };
+    return { object: result.object, usage: result.usage };
   } catch (err) {
     log.warn(
       { ...bindings, err: summarizeLlmError(err) },
@@ -367,7 +402,7 @@ async function retryStructurerOnProse(
   }
 }
 
-/** merge the structurer-only retry's usage into the original Mastra response.
+/** merge a structuring call's usage into the reviewer's response.
  * preserves the original response shape so downstream consumers see one
  * coherent usage object that reflects the actual tokens billed. */
 function augmentResponseWithStructurerRetry<T extends { usage?: StructurerRetryUsage }>(
@@ -443,7 +478,7 @@ export type ReviewTier = "skim" | "deep-review";
 export interface RunReviewOptions {
   provider?: GitProvider;
   sourceRef?: string;
-  extraTools?: ToolsInput;
+  extraTools?: ToolSet;
   languageSummary?: string;
   tier?: ReviewTier;
   /** Files changed in the PR but not present in the current review chunk. */
@@ -464,18 +499,27 @@ export interface RunReviewOptions {
   deadlineAt?: number;
   /** search/file cache shared by every pass of one review; created at the multi-call entry points. */
   toolCache?: ToolCache;
+  /** local checkout of the PR; when set, search and file reads run on it instead of the provider API. */
+  checkout?: RepoCheckout;
 }
 
-function buildTools(options?: RunReviewOptions): ToolsInput {
-  if (options?.tier === "skim") return {};
+export function createToolCache(options: RunReviewOptions): ToolCache | undefined {
+  if (options.checkout) return new ToolCache(checkoutCodeSource(options.checkout));
+  if (options.provider) {
+    return new ToolCache(providerCodeSource(options.provider, options.sourceRef ?? "HEAD"));
+  }
+  return undefined;
+}
 
-  const tools: ToolsInput = {};
-  if (options?.provider) {
-    const cache = options.toolCache ?? new ToolCache(options.provider, options.sourceRef ?? "HEAD");
-    tools.searchCode = createSearchCodeTool(cache);
-    if (options.sourceRef) {
-      tools.getFileContext = createGetFileContextTool(cache);
-    }
+function buildTools(options?: RunReviewOptions): ToolSet {
+  if (!options || options.tier === "skim") return {};
+
+  const cache = options.toolCache ?? createToolCache(options);
+  if (!cache) return {};
+  const tools: ToolSet = { searchCode: createSearchCodeTool(cache) };
+  // the provider source needs a ref to read files at; a checkout always has its tree
+  if (cache.scope === "pr-head" || options.sourceRef) {
+    tools.getFileContext = createGetFileContextTool(cache);
   }
   return tools;
 }
@@ -493,7 +537,8 @@ export async function runReview(
     options?.deadlineAt === undefined ? Infinity : options.deadlineAt - Date.now(),
   );
   if (budgetMs <= 0) throw createReviewPassTimeoutError(budgetMs);
-  const systemPrompt = buildSystemPrompt(config, tier);
+  const searchScope = options?.toolCache?.scope ?? (options?.checkout ? "pr-head" : "remote");
+  const systemPrompt = buildSystemPrompt(config, tier, searchScope);
   const userMessage = buildUserMessage(
     diff,
     prMetadata,
@@ -504,6 +549,7 @@ export async function runReview(
     options?.chunkFiles,
     tier === "deep-review" ? options?.rankedContext : undefined,
     options?.priorContext,
+    searchScope,
   );
   const modelConfig = options?.modelConfig ?? resolveModelConfig();
   const modelName = getModelDisplayName(modelConfig);
@@ -511,19 +557,10 @@ export async function runReview(
   const builtInTools = buildTools(options);
   const extraTools = tier === "skim" ? {} : (options?.extraTools ?? {});
 
-  const defaultOptions = resolveDefaultAgentOptions(modelConfig);
-
-  const agent = new Agent({
-    id: "review-agent",
-    name: "Rusty Bot Reviewer",
-    instructions: () =>
-      buildCachedSystemMessages(systemPrompt, {
-        anthropicCacheControl: supportsAnthropicCacheControl(modelConfig),
-      }),
-    model: () => resolveModel(modelConfig),
-    tools: { ...builtInTools, ...extraTools },
-    ...(defaultOptions && { defaultOptions }),
+  const systemMessages = buildCachedSystemMessages(systemPrompt, {
+    anthropicCacheControl: supportsAnthropicCacheControl(modelConfig),
   });
+  const tools = { ...builtInTools, ...extraTools };
 
   const schema =
     tier === "skim"
@@ -534,16 +571,14 @@ export async function runReview(
 
   const rawModelSettings = options?.modelSettings ?? resolveModelSettings("review");
   const modelSettings = applyModelConstraints(modelConfig, rawModelSettings);
-  // when the structuring model is set, it owns the JSON output, so we evaluate
-  // jsonPromptInjection against ITS capabilities rather than the main model's.
-  // the main model just writes prose; whether to use native json_schema vs
-  // prompt-injected JSON is the structurer's problem.
+  // when the structuring model is set, it owns the JSON output, so the native
+  // json_schema vs prompt-injected JSON decision (made inside
+  // generateStructured) follows ITS capabilities rather than the main model's.
+  // the main model just writes prose.
   const structuringModelOverride = readLlmStructuringModel();
   const structuringConfig = structuringModelOverride
     ? resolveModelConfigWithOverride(structuringModelOverride)
     : undefined;
-  const jsonPromptInjection = resolveJsonPromptInjection(structuringConfig ?? modelConfig);
-  const structuringModel = structuringConfig ? resolveModel(structuringConfig) : undefined;
   const maxSteps = readLlmMaxSteps();
   // the final allowed step has to be tool-free, otherwise tool-happy models
   // (Anthropic in particular) burn the whole budget on tool calls and end with finishReason="tool-calls" and no text — which
@@ -581,23 +616,25 @@ export async function runReview(
       generateWithStructuredOutputRetry(async () => {
         generateAttempt++;
         const onStepFinish = buildStepLogger(logBindings, generateAttempt);
-        const r = await agent.generate(userMessage, {
-          abortSignal: controller.signal,
-          structuredOutput: {
-            schema,
-            jsonPromptInjection,
-            ...(structuringModel && { model: structuringModel }),
-          },
-          ...(Object.keys(modelSettings).length > 0 && { modelSettings }),
+        const call = {
+          modelConfig,
+          system: systemMessages,
+          prompt: userMessage,
+          settings: modelSettings,
+          tools,
           maxSteps,
           prepareStep,
+          abortSignal: controller.signal,
           ...(onStepFinish && { onStepFinish }),
-        });
-        // mastra's prompt-injected JSON path can silently return object:undefined
-        // when the model emits unparseable text instead of throwing the schema
-        // validation error. surface it as one so the retry wrapper picks it up.
-        // typed cast because mastra's return type marks .object as always defined.
-        if (!(r as { object?: unknown }).object) {
+        };
+        const r = structuringConfig
+          ? await generateProseThenStructure(call, schema, structuringConfig)
+          : await generateStructured<unknown>({ ...call, schema });
+        // the prompt-injected path, a run whose last step was not "stop", and a
+        // structurer that produced nothing all come back as object:undefined
+        // rather than throwing. surface it as the schema validation error so
+        // the retry wrapper picks it up.
+        if (!r.object) {
           log.warn(
             { ...logBindings, ...summarizeFailedResponse(r) },
             "structured output produced no object — captured diagnostic snapshot",
@@ -644,7 +681,7 @@ export async function runReview(
 
           // CHEAP RETRY: structurer-only on the reviewer's prose. The expensive
           // tool trajectory already ran and produced text — re-running the whole
-          // agent.generate (the existing fallback below) costs ~20× more than
+          // reviewer generation (the existing fallback below) costs ~20× more than
           // just retrying the structurer on the cached prose. Only fires when
           // a structuring model is configured AND we actually have prose to
           // restructure. On failure, falls through to the existing retry path.
@@ -657,10 +694,7 @@ export async function runReview(
               logBindings,
             );
             if (retried) {
-              return augmentResponseWithStructurerRetry(
-                r as { usage?: StructurerRetryUsage },
-                retried,
-              ) as typeof r;
+              return augmentResponseWithStructurerRetry(r, retried);
             }
           }
 
@@ -681,7 +715,7 @@ export async function runReview(
     clearTimeout(timer);
   }
 
-  const parsed = response.object;
+  const parsed = response.object as z.infer<typeof schema>;
   const usage = response.usage as {
     inputTokens?: number;
     outputTokens?: number;

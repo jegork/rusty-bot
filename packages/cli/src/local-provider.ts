@@ -3,20 +3,16 @@ import { readFile } from "node:fs/promises";
 import { join, isAbsolute } from "node:path";
 import { promisify } from "node:util";
 import {
-  logger,
+  gitEnv,
   parseDiff,
+  RepoCheckout,
   type CodeSearchResult,
   type FilePatch,
   type GitProvider,
   type PRMetadata,
 } from "@rusty-bot/core";
-import { gitEnv } from "./git-env.js";
 
 const execFileAsync = promisify(execFile);
-
-const log = logger.child({ package: "cli", module: "local-provider" });
-
-const SEARCH_RESULT_LIMIT = 50;
 
 export interface LocalGitProviderOptions {
   repoPath: string;
@@ -32,6 +28,8 @@ export interface LocalGitProviderOptions {
 // Network-only operations (posting comments, updating PR fields) are no-ops;
 // the CLI prints results to stdout instead.
 export class LocalGitProvider implements GitProvider {
+  private checkoutPromise?: Promise<RepoCheckout>;
+
   constructor(private readonly opts: LocalGitProviderOptions) {}
 
   private async git(args: string[]): Promise<string> {
@@ -81,6 +79,20 @@ export class LocalGitProvider implements GitProvider {
     };
   }
 
+  // search and file reads run on the commit headRef resolves to, so they see
+  // exactly what the diff shows regardless of which branch is checked out.
+  checkout(): Promise<RepoCheckout> {
+    this.checkoutPromise ??= this.git([
+      "rev-parse",
+      "--verify",
+      `${this.opts.headRef}^{commit}`,
+    ]).then(
+      (sha) =>
+        new RepoCheckout({ repoPath: this.opts.repoPath, tree: sha.trim(), approximate: false }),
+    );
+    return this.checkoutPromise;
+  }
+
   async getFileContent(path: string, ref: string): Promise<string | null> {
     // only short-circuit to the working tree when the user explicitly chose
     // HEAD as the head ref. for any other ref the working tree may be on a
@@ -94,79 +106,15 @@ export class LocalGitProvider implements GitProvider {
       }
     }
 
-    try {
-      return await this.git(["show", `${ref}:${path}`]);
-    } catch {
-      return null;
-    }
+    const checkout =
+      ref === this.opts.headRef
+        ? await this.checkout()
+        : new RepoCheckout({ repoPath: this.opts.repoPath, tree: ref, approximate: false });
+    return checkout.readFile(path);
   }
 
   async searchCode(query: string): Promise<CodeSearchResult[]> {
-    if (!query.trim()) return [];
-
-    // prefer ripgrep when available — it's faster, respects gitignore, and
-    // produces a stable column-prefixed format. fall back to `git grep`,
-    // which is always present alongside git itself.
-    const rgResults = await this.searchWithRipgrep(query);
-    if (rgResults !== null) return rgResults;
-    return this.searchWithGitGrep(query);
-  }
-
-  private async searchWithRipgrep(query: string): Promise<CodeSearchResult[] | null> {
-    try {
-      const { stdout } = await execFileAsync(
-        "rg",
-        [
-          "--no-heading",
-          "--with-filename",
-          "--line-number",
-          "--color=never",
-          "--max-count",
-          "5",
-          "--max-columns",
-          "300",
-          "--fixed-strings",
-          "--",
-          query,
-          // pass the cwd explicitly: when rg is invoked via execFile its stdin
-          // is a pipe (not a tty), and without a path argument it would read
-          // patterns from stdin and hang forever.
-          ".",
-        ],
-        { cwd: this.opts.repoPath, maxBuffer: 16 * 1024 * 1024 },
-      );
-      return parseRipgrepOutput(stdout);
-    } catch (err) {
-      const code = (err as { code?: number | string }).code;
-      // ripgrep exits 1 when there are no matches — treat as empty result, not a fallback.
-      if (code === 1) return [];
-      // ENOENT or any other failure means rg is unavailable; let the caller fall back.
-      return null;
-    }
-  }
-
-  private async searchWithGitGrep(query: string): Promise<CodeSearchResult[]> {
-    try {
-      const stdout = await this.git([
-        "grep",
-        "--no-color",
-        "-n",
-        "-I",
-        "--fixed-strings",
-        "--max-count=5",
-        "--",
-        query,
-      ]);
-      return parseGitGrepOutput(stdout);
-    } catch (err) {
-      const code = (err as { code?: number | string }).code;
-      // `git grep` exits 1 when there are no matches — that's a normal "empty result"
-      // and not worth logging. anything else (ENOENT, non-repo cwd, broken pipe, ...)
-      // is a real failure that the LLM cannot distinguish from "no matches", so warn.
-      if (code === 1) return [];
-      log.warn({ err, query }, "git grep failed, returning no results");
-      return [];
-    }
+    return (await this.checkout()).grep(query);
   }
 
   async postSummaryComment(): Promise<void> {
@@ -188,33 +136,4 @@ export class LocalGitProvider implements GitProvider {
   async updatePRTitle(): Promise<void> {
     // no-op — there is no PR to update locally.
   }
-}
-
-// ripgrep --no-heading lines look like `path:line:content` (column suppressed when --column is omitted).
-function parseRipgrepOutput(stdout: string): CodeSearchResult[] {
-  return parseGrepLines(stdout);
-}
-
-// `git grep -n` produces the same `path:line:content` format.
-function parseGitGrepOutput(stdout: string): CodeSearchResult[] {
-  return parseGrepLines(stdout);
-}
-
-function parseGrepLines(stdout: string): CodeSearchResult[] {
-  const results: CodeSearchResult[] = [];
-  for (const raw of stdout.split("\n")) {
-    if (!raw) continue;
-    const firstColon = raw.indexOf(":");
-    if (firstColon === -1) continue;
-    const secondColon = raw.indexOf(":", firstColon + 1);
-    if (secondColon === -1) continue;
-    const file = raw.slice(0, firstColon);
-    const lineStr = raw.slice(firstColon + 1, secondColon);
-    const line = Number.parseInt(lineStr, 10);
-    if (!Number.isFinite(line)) continue;
-    const content = raw.slice(secondColon + 1);
-    results.push({ file, line, content });
-    if (results.length >= SEARCH_RESULT_LIMIT) break;
-  }
-  return results;
 }

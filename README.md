@@ -2,19 +2,20 @@
 
 AI-powered PR review bot with configurable review styles, focus areas, and ticket compliance checking. Works with GitHub, GitLab, and Azure DevOps.
 
-Built on [Mastra](https://mastra.ai/) (TypeScript).
+Built on the [AI SDK](https://ai-sdk.dev) (TypeScript).
 
 ## Features
 
 - **5 review styles** — Strict, Balanced, Lenient, Roast, Thorough
 - **6 focus areas** — Security, Performance, Bugs, Code Style, Test Coverage, Documentation
 - **Triage-driven cascading review** — cheap model classifies files as skip/skim/deep-review, each tier gets an appropriate level of scrutiny
+- **Code search on the PR head** — in CI and the local CLI the agent's `searchCode` / `getFileContext` tools read the checkout (`git grep` / `git show` on the PR head commit), so code added or renamed in the PR is found; without a checkout they fall back to the platform API
 - **Tree-sitter context expansion** — hunks expand to enclosing function/class boundaries instead of fixed line counts (TS, JS, Python, Go, Java, Rust)
 - **Structured summary comments** — severity table, collapsible issue details, missing tests list, files reviewed
 - **Inline code comments** — findings posted directly on PR diff lines
 - **Ticket compliance** — discovers linked tickets from PR description, branch name, and platform APIs (GitHub linked issues, ADO work items), then checks if requirements are addressed
 - **OpenGrep pre-scan** — runs [OpenGrep](https://opengrep.dev/) SAST on changed files before LLM review, feeds findings for triage (gracefully skipped when not installed)
-- **Multi-provider LLM** — OpenAI, Anthropic, Google, or any provider supported by Mastra
+- **Multi-provider LLM** — OpenAI, Anthropic, Google, OpenRouter, Requesty, Azure OpenAI / AI Foundry, Ollama, or any OpenAI-compatible endpoint
 - **PR description generation** — optionally generate a structured PR description from the diff when the description is empty or a placeholder (off by default)
 - **Scope creep detection** — optionally list changes in the diff that fall outside the PR's stated intent (title, description, linked tickets) in a dedicated summary section (off by default; enable with `RUSTY_FLAG_SCOPE_CREEP=true`)
 - **Incremental review** — on subsequent pushes the bot reviews only the diff since the previously-reviewed state (commit on GitHub/GitLab, PR iteration on Azure DevOps) instead of the entire PR, cutting tokens on multi-commit PRs. The previous summary, recommendation, and surfaced findings are carried forward so the agent keeps PR-wide context without re-reading the full diff (on by default; opt out with `RUSTY_INCREMENTAL_REVIEW=false`)
@@ -30,7 +31,7 @@ Rusty Bot runs as a one-shot job inside your CI: pick [GitHub Action Setup](#git
 packages/
 ├── core/           # shared review engine
 │   ├── src/
-│   │   ├── agent/      # Mastra review agent, judge/filter pass, prompt templates, Zod output schema
+│   │   ├── agent/      # AI SDK review agent, judge/filter pass, prompt templates, Zod output schema
 │   │   ├── analysis/   # pure analysis of consensus raw-findings ndjson (`rusty-bot analyze-findings`)
 │   │   ├── diff/       # unified diff parser, tree-sitter context expansion, file filter, token-aware compression
 │   │   ├── formatter/  # summary comment + inline comment markdown renderers
@@ -63,6 +64,7 @@ jobs:
       contents: read
       issues: read
     steps:
+      - uses: actions/checkout@v4
       - uses: jegork/rusty-bot@v1
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -72,6 +74,8 @@ jobs:
           RUSTY_FOCUS_AREAS: security,bugs,performance
           RUSTY_FAIL_ON_CRITICAL: "true"
 ```
+
+The `actions/checkout` step gives the reviewer read-only search over the PR's code; without it the agent falls back to the GitHub code-search API, which only sees the default branch. The default `fetch-depth: 1` is enough — the Action fetches the PR head commit itself with the same `GITHUB_TOKEN`.
 
 **Required permissions** (set on the job, not the whole workflow):
 
@@ -130,6 +134,8 @@ steps:
       RUSTY_FAIL_ON_CRITICAL: "true"
 ```
 
+The pipeline's default `checkout: self` is used automatically: the reviewer searches the PR's code with `git grep` on the PR head commit, fetching that commit with `$(System.AccessToken)` when the shallow merge-commit checkout lacks it. `fetchDepth: 0` is **not** required.
+
 Set `RUSTY_LLM_MODEL`, `ANTHROPIC_API_KEY`, and other variables as pipeline variables in Azure DevOps. For Azure OpenAI with managed identity, replace the API key vars with `RUSTY_AZURE_RESOURCE_NAME` and `RUSTY_AZURE_DEPLOYMENT`.
 
 The task exits with code 1 when critical issues are found (configurable via `RUSTY_FAIL_ON_CRITICAL`), which can gate PR merges.
@@ -167,6 +173,7 @@ rusty-bot-review:
 - Updates the MR title/description when `RUSTY_RENAME_TITLE_TO_CONVENTIONAL=true` or `RUSTY_GENERATE_DESCRIPTION=true`
 - Resolves linked closing issues (`Closes #123`) via the GitLab `closes_issues` endpoint
 - Supports incremental review via head SHA — subsequent pushes only review the delta
+- Searches the MR's code in the job's checkout at `CI_PROJECT_DIR`, falling back to the GitLab API when it is missing
 
 The job exits with code 1 when critical issues are found (configurable via `RUSTY_FAIL_ON_CRITICAL`), which can gate MR merges when the job is on the merge train or required.
 
@@ -202,7 +209,7 @@ The CLI reuses the same review engine, prompts, triage, MCP wiring, convention-f
 
 The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, the matching provider API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.), `RUSTY_LLM_TRIAGE_MODEL`, `RUSTY_CASCADE_ENABLED`, `RUSTY_JUDGE_*`, `RUSTY_OPENGREP_RULES`, MCP server configs, etc. See the [Configuration](#configuration) section for the full list.
 
-**`searchCode` tool:** the CLI's `LocalGitProvider` shells out to `ripgrep` when available (preferred for speed and gitignore awareness) and falls back to `git grep` otherwise. PR-mutation methods (post comment, update title/description, etc.) are no-ops in the CLI since there is no PR to mutate.
+**`searchCode` tool:** the CLI searches the commit `--head` resolves to with `git grep`, the same backend the CI handlers use on their checkout. PR-mutation methods (post comment, update title/description, etc.) are no-ops in the CLI since there is no PR to mutate.
 
 ## Configuration
 
@@ -262,7 +269,7 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 | `RUSTY_RENAME_TITLE_TO_CONVENTIONAL` | rewrite non-conventional PR titles into Conventional Commits format | `false` |
 | `RUSTY_FLAG_SCOPE_CREEP` | list changes that fall outside the PR's stated intent in a "Scope Creep" section of the summary comment | `false` |
 | `RUSTY_LLM_MAX_RETRIES` | application-level retries on transient LLM errors (max 2) | `2` |
-| `RUSTY_LLM_MAX_STEPS` | cap on multi-step tool-using trajectories per review pass. The final allowed step is forced to `toolChoice: "none"` so the model has to emit text (and therefore structured output), which avoids tool-happy models — Anthropic in particular — terminating with `finishReason: "tool-calls"` and zero text. Unset, empty or invalid = 20. There is always a cap: without one, mastra stops after 5 steps with no forced final answer, so a model that makes one tool call per step ends mid-investigation with no JSON. | `20` |
+| `RUSTY_LLM_MAX_STEPS` | cap on multi-step tool-using trajectories per review pass. The final allowed step is forced to `toolChoice: "none"` so the model has to emit text (and therefore structured output), which avoids tool-happy models — Anthropic in particular — terminating with `finishReason: "tool-calls"` and zero text. Unset, empty or invalid = 20. The cap is the only bound on the tool loop, so there is always one. | `20` |
 | `RUSTY_REVIEW_PASS_TIMEOUT_MS` | wall-clock budget in milliseconds for one review pass, including its retries. A pass that runs out of time is aborted and counts as failed, so consensus continues with the surviving passes. Unset, empty, non-numeric or below `1` = `480000` (8 minutes). | `480000` |
 | `RUSTY_REVIEW_DEADLINE_MS` | optional review-wide budget in milliseconds, measured from the start of the review. Every pass gets at most the time remaining; skim files whose pass hit the deadline are reported as not reviewed instead of being promoted to the deep tier. Unset or invalid = no deadline. | unset |
 | `RUSTY_LLM_STRUCTURING_MODEL` | model id for a separate structuring pass (e.g. `azure-openai/gpt-5.4-mini`). When set, the review model writes freeform prose with tools available and no schema pressure, and a cheap structuring model translates the prose into the required JSON. Eliminates the entire class of "model terminates with tool-calls and zero text" failures since the review model is no longer on the schema-output path. Adds one cheap LLM call per review pass. | — |
@@ -360,13 +367,23 @@ RUSTY_REVIEW_MODELS=anthropic/claude-sonnet-4-5,ollama/gpt-oss:120b,requesty/goo
 
 Structured output: by default Ollama uses prompt-injected JSON via the structuring model (set `RUSTY_LLM_STRUCTURING_MODEL` to a known-good model like `requesty/google/gemini-3.1-flash-lite-preview`). Opt into native JSON schema for specific models with `RUSTY_LLM_NATIVE_STRUCTURED_OUTPUT=ollama/gpt-oss*`.
 
-**9. Mastra model router (default)** — direct provider API keys:
+**9. Direct provider API keys (default)**:
 ```bash
 RUSTY_LLM_MODEL=anthropic/claude-sonnet-4-20250514
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Supports 99+ providers: `openai/gpt-4o`, `google/gemini-2.5-flash`, `openrouter/...`, etc.
+Supported prefixes and the key each one reads:
+
+| Prefix | Example | API key |
+|---|---|---|
+| `anthropic/` | `anthropic/claude-sonnet-4-5` | `ANTHROPIC_API_KEY` |
+| `openai/` | `openai/gpt-5-mini` | `OPENAI_API_KEY` |
+| `google/` | `google/gemini-3.1-pro` | `GOOGLE_GENERATIVE_AI_API_KEY` |
+| `openrouter/` | `openrouter/x-ai/grok-4.3` | `OPENROUTER_API_KEY` |
+| `requesty/` | `requesty/anthropic/claude-sonnet-4-6` | `REQUESTY_API_KEY` |
+
+Any other prefix fails at startup with a config error that lists the supported ones. A missing key fails the same way and names the env var.
 
 ### Model + Provider Routing Notes
 
@@ -384,7 +401,7 @@ If you observe a new failure pattern tied to a specific provider+model combinati
 
 ### OpenRouter as an alternative gateway
 
-Same shape as Requesty — Mastra's router fallback handles `openrouter/*` model ids automatically when `OPENROUTER_API_KEY` is set. No code change needed.
+Same shape as Requesty — `openrouter/*` model ids are sent through the OpenAI-compatible provider to `https://openrouter.ai/api/v1` when `OPENROUTER_API_KEY` is set. No code change needed.
 
 ```bash
 OPENROUTER_API_KEY=sk-or-v1-...
@@ -434,9 +451,9 @@ Some models enforce a fixed temperature (e.g. `moonshot/kimi-k2.5` only accepts 
 
 ### Structured Output Compatibility
 
-Mastra asks the model to return findings as a typed JSON object via `response_format: json_schema`. Some providers (notably MiniMax M2.x and DeepSeek V4 in thinking mode) do not implement that protocol, and routers like Requesty only proxy `json_schema` for OpenAI / Anthropic / Google / Moonshot today. When the model can't honour the schema, the response comes back empty and the review pass fails with `STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED`.
+Rusty Bot asks the model to return findings as a typed JSON object via `response_format: json_schema` (the AI SDK's native structured output). Some providers (notably MiniMax M2.x and DeepSeek V4 in thinking mode) do not implement that protocol, and routers like Requesty only proxy `json_schema` for OpenAI / Anthropic / Google / Moonshot today. When the model can't honour the schema, the response comes back empty and the review pass fails with `STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED`.
 
-Rusty Bot detects this automatically and falls back to **prompt-injected JSON** for non-supported model strings (Mastra's `jsonPromptInjection: true`) — the schema is added to the system prompt and Mastra parses the JSON out of the text response. The default rule is:
+Rusty Bot detects this automatically and falls back to **prompt-injected JSON** for non-supported model strings — the JSON Schema is appended to the system prompt and Rusty Bot parses the JSON object out of the text response. The default rule is:
 
 - Native `json_schema`: any model whose ID starts with `openai/`, `anthropic/`, `google/`, `azure-openai/`, `requesty/openai/`, `requesty/anthropic/`, `requesty/google/`, `requesty/moonshot/`, or `requesty/fireworks/`. Azure OpenAI, Azure-hosted Anthropic (both API key and Entra ID), and OpenAI-compatible endpoints also default to native.
 - Prompt injection: everything else (e.g. `requesty/minimaxi/...`, `requesty/deepseek/...`, `requesty/qwen/...`).
@@ -457,7 +474,7 @@ Force-on takes precedence over force-off when the same model appears in both lis
 
 Some models — Kimi K2.x with thinking enabled, Anthropic models with tools — sometimes terminate with `finishReason: "tool-calls"` and zero text instead of emitting JSON, regardless of which schema mode is in use. The single-model path can't recover from that: there's no text for either the native parser or the prompt-injection parser to work with.
 
-`RUSTY_LLM_STRUCTURING_MODEL` opts into Mastra's two-agent flow:
+`RUSTY_LLM_STRUCTURING_MODEL` opts into a two-call flow:
 
 ```bash
 RUSTY_LLM_STRUCTURING_MODEL=azure-openai/gpt-5.4-mini

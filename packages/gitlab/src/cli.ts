@@ -35,6 +35,7 @@ import {
   filterAnchorableFindings,
   buildPriorContextFromReview,
   configureGlobalHttp,
+  resolveRepoCheckout,
 } from "@rusty-bot/core";
 import { GitLabProvider } from "./provider.js";
 
@@ -208,6 +209,18 @@ export async function runReview(config: GitLabCliConfig): Promise<number> {
     { mrIid: metadata.id, source: metadata.sourceBranch, target: metadata.targetBranch },
     "reviewing MR",
   );
+
+  // merge-request pipelines usually check out the source head already; the fetch is best effort
+  const jobToken = process.env.CI_JOB_TOKEN;
+  const checkout = await resolveRepoCheckout({
+    repoPath: process.env.CI_PROJECT_DIR,
+    headSha: metadata.headSha,
+    fetchAuthHeader: jobToken
+      ? "basic " + Buffer.from(`gitlab-ci-token:${jobToken}`).toString("base64")
+      : undefined,
+  });
+  const fetchSourceFile = (path: string) =>
+    checkout ? checkout.readFile(path) : provider.getFileContent(path, metadata.sourceBranch);
 
   const conventionFile = await fetchConventionFile(
     (path, ref) => provider.getFileContent(path, ref),
@@ -385,9 +398,7 @@ export async function runReview(config: GitLabCliConfig): Promise<number> {
         "triage classification",
       );
 
-      const expandedDeep = await expandContext(deepReview, (path) =>
-        provider.getFileContent(path, metadata.sourceBranch),
-      );
+      const expandedDeep = await expandContext(deepReview, fetchSourceFile);
 
       review = await runCascadeReview(
         skim,
@@ -398,6 +409,7 @@ export async function runReview(config: GitLabCliConfig): Promise<number> {
         {
           provider,
           sourceRef: metadata.sourceBranch,
+          checkout: checkout ?? undefined,
           languageSummary,
           mcpServers,
           maxTokens: MAX_TOKENS,
@@ -417,9 +429,7 @@ export async function runReview(config: GitLabCliConfig): Promise<number> {
   }
 
   if (!review) {
-    const expanded = await expandContext(reviewable, (path) =>
-      provider.getFileContent(path, metadata.sourceBranch),
-    );
+    const expanded = await expandContext(reviewable, fetchSourceFile);
 
     review = await runMultiCallReview(
       expanded,
@@ -429,6 +439,7 @@ export async function runReview(config: GitLabCliConfig): Promise<number> {
       {
         provider,
         sourceRef: metadata.sourceBranch,
+        checkout: checkout ?? undefined,
         languageSummary,
         mcpServers,
         maxTokens: MAX_TOKENS,

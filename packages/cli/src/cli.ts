@@ -86,6 +86,7 @@ export async function run(args: CliArgs): Promise<number> {
 
   const languageSummary = summarizeLanguages(reviewable);
   const mcpServers = await loadMcpServerConfigsFromEnv();
+  const checkout = await provider.checkout();
 
   let review: ReviewResult | undefined;
 
@@ -113,6 +114,7 @@ export async function run(args: CliArgs): Promise<number> {
       review = await runCascadeReview(skim, expandedDeep, reviewConfig, metadata, undefined, {
         provider,
         sourceRef: metadata.sourceBranch,
+        checkout,
         languageSummary,
         mcpServers,
         maxTokens: MAX_TOKENS,
@@ -136,6 +138,7 @@ export async function run(args: CliArgs): Promise<number> {
     review = await runMultiCallReview(expanded, reviewConfig, metadata, undefined, {
       provider,
       sourceRef: metadata.sourceBranch,
+      checkout,
       languageSummary,
       mcpServers,
       maxTokens: MAX_TOKENS,

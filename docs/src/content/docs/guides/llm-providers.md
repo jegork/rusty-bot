@@ -40,9 +40,9 @@ RUSTY_LLM_API_KEY=optional-key
 
 `RUSTY_LLM_API_KEY` is optional; omit it for unauthenticated local endpoints.
 
-## 4. Mastra router (default)
+## 4. Direct provider API keys (default)
 
-Direct provider API keys with 99+ providers supported:
+Supported prefixes: `anthropic/` (`ANTHROPIC_API_KEY`), `openai/` (`OPENAI_API_KEY`), `google/` (`GOOGLE_GENERATIVE_AI_API_KEY`), `openrouter/` (`OPENROUTER_API_KEY`) and `requesty/` (`REQUESTY_API_KEY`). Any other prefix, or a missing key, fails at startup with a config error:
 
 ```bash
 RUSTY_LLM_MODEL=anthropic/claude-sonnet-4-20250514

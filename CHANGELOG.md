@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.20.0](https://github.com/jegork/rusty-bot/compare/v1.19.0...v1.20.0) (2026-10-29)
+
+
+### Features
+
+* **cli:** analyze-findings command for consensus raw-findings artifacts ([7173e02](https://github.com/jegork/rusty-bot/commit/7173e02277fe547ee884e3645767df9229f44d0a))
+* **consensus:** file sink, cluster variants and env knobs for experiments ([ad62261](https://github.com/jegork/rusty-bot/commit/ad6226159dc32f7478bbf99d320e37e3fdcdeded))
+* **consensus:** tag raw-findings records with run id and cluster pass membership ([3784abd](https://github.com/jegork/rusty-bot/commit/3784abdfba383f2a1fb0302380e61f4cb1c3f60e))
+
+
+### Bug Fixes
+
+* **consensus:** bound experiment knobs and attribute pass records to the right model ([3d107ed](https://github.com/jegork/rusty-bot/commit/3d107ed3db18ca214f9841fde09dac477b3b2b6e))
+* **consensus:** measure agreement as mean pairwise overlap between passes ([799b3c3](https://github.com/jegork/rusty-bot/commit/799b3c3531e1291b06ba00921908cf88e3e6aac7))
+* **consensus:** treat two empty passes as agreeing ([4a4fe66](https://github.com/jegork/rusty-bot/commit/4a4fe669d821a903c7f639002e1fd95e395a2ecd))
+* **core:** distinguish unavailable code search from no matches ([4fd0401](https://github.com/jegork/rusty-bot/commit/4fd0401a02f3dc0f4529feddaa360064e5abffdf))
+* **diff:** review deletion-only hunks and match ignore patterns at any depth ([97d0ada](https://github.com/jegork/rusty-bot/commit/97d0ada8ebaf0a7d6c18749871bea7edfda23c58))
+* **github:** fail fast on code-search rate limits and report unavailable searches ([8735bf3](https://github.com/jegork/rusty-bot/commit/8735bf31bb19e9ace886971b60535281e898aedf))
+* **github:** start the webhook server from a dedicated entry module ([e75e229](https://github.com/jegork/rusty-bot/commit/e75e229c3f675fee8be4da2ecdb13e967666fed8))
+* **prior-context:** only trust the context marker in the comment header ([3332fa4](https://github.com/jegork/rusty-bot/commit/3332fa4061458fc25bc8b4e7daa3b7988dc3193a))
+* **prompts:** delimit untrusted PR content in every agent prompt ([292f8d4](https://github.com/jegork/rusty-bot/commit/292f8d4bcf3c584837723c841c7d0e914f8d09b8))
+* **review:** fail fast on tool-loop exhaustion, summarize LLM errors in logs, reset step counter per attempt ([0f12c3e](https://github.com/jegork/rusty-bot/commit/0f12c3e8178f4127915d964c2f9dec9e5320003b))
+
+
+### Refactor
+
+* **core:** replace Mastra with direct AI SDK calls ([#212](https://github.com/jegork/rusty-bot/issues/212)) ([cce6852](https://github.com/jegork/rusty-bot/commit/cce6852e410c804482a6cbb18394db092a2b0822))
+
 ## [1.19.0](https://github.com/jegork/rusty-bot/compare/v1.18.0...v1.19.0) (2026-10-20)
 
 

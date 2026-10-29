@@ -22,6 +22,8 @@ const deletionOnly: FilePatch = {
   ],
 };
 
+const fakeCheckout = vi.hoisted(() => ({ tree: "abc", approximate: false }));
+
 vi.mock("../local-provider.js", () => ({
   LocalGitProvider: vi.fn(function () {
     return {
@@ -35,6 +37,7 @@ vi.mock("../local-provider.js", () => ({
       }),
       getDiff: vi.fn().mockResolvedValue([deletionOnly]),
       getFileContent: vi.fn().mockResolvedValue(null),
+      checkout: vi.fn().mockResolvedValue(fakeCheckout),
     };
   }),
 }));
@@ -79,5 +82,11 @@ describe("run", () => {
     const reviewed = vi.mocked(runMultiCallReview).mock.calls[0]?.[0];
     expect(reviewed?.map((p) => p.path)).toEqual(["src/auth/check.ts"]);
     expect(reviewed?.[0].deletions).toBe(2);
+  });
+
+  it("passes the provider's checkout into the review options", async () => {
+    await run(args);
+
+    expect(vi.mocked(runMultiCallReview).mock.calls[0]?.[4]?.checkout).toBe(fakeCheckout);
   });
 });

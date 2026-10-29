@@ -11,6 +11,7 @@ import type {
 } from "../types.js";
 import type { OpenGrepFinding } from "../opengrep/types.js";
 import type { ReviewTier } from "./review.js";
+import type { SearchScope } from "./tool-cache.js";
 import { wrapUntrusted } from "./untrusted.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -63,7 +64,11 @@ const TIER_PROMPT_SECTIONS = {
 const SCOPE_CREEP_OUTPUT_REQUIREMENT =
   "- A scopeCreep list of changes that do not serve the PR's stated intent (see the scope creep rules below). Leave the array empty when every change is in scope.";
 
-export function buildSystemPrompt(config: ReviewConfig, tier: ReviewTier = "deep-review"): string {
+export function buildSystemPrompt(
+  config: ReviewConfig,
+  tier: ReviewTier = "deep-review",
+  searchScope: SearchScope = "remote",
+): string {
   const base = loadTemplate("base.txt");
   const styleInstructions = buildStyleInstructions(config.style);
   const focusInstructions = buildFocusInstructions(config.focusAreas);
@@ -79,19 +84,24 @@ export function buildSystemPrompt(config: ReviewConfig, tier: ReviewTier = "deep
   const scopeCreepInstructions = scopeCreep ? `\n${loadTemplate("scope-creep.txt")}` : "";
 
   // replacer functions: a string replacement would expand $&, $1 etc. in substituted values
-  return base
-    .replace("{{tool_instructions}}", () => tierSections.tool_instructions)
-    .replace("{{extended_output_requirements}}", () => extendedOutputRequirements)
-    .replace(
-      "{{unverified_reference_qualifier}}",
-      () => tierSections.unverified_reference_qualifier,
-    )
-    .replace("{{speculation_rule}}", () => tierSections.speculation_rule)
-    .replace("{{other_files_tool_note}}", () => tierSections.other_files_tool_note)
-    .replace("{{style_instructions}}", () => styleInstructions)
-    .replace("{{focus_instructions}}", () => focusInstructions)
-    .replace("{{scope_creep_instructions}}", () => scopeCreepInstructions)
-    .replace("{{convention_instructions}}", () => conventionInstructions);
+  return (
+    base
+      .replace("{{tool_instructions}}", () => tierSections.tool_instructions)
+      .replace("{{extended_output_requirements}}", () => extendedOutputRequirements)
+      .replace(
+        "{{unverified_reference_qualifier}}",
+        () => tierSections.unverified_reference_qualifier,
+      )
+      .replace("{{speculation_rule}}", () => tierSections.speculation_rule)
+      // a pr-head search sees the other changed files as they are in the PR, so there is nothing stale to warn about
+      .replace("{{other_files_tool_note}}", () =>
+        searchScope === "remote" ? tierSections.other_files_tool_note : "",
+      )
+      .replace("{{style_instructions}}", () => styleInstructions)
+      .replace("{{focus_instructions}}", () => focusInstructions)
+      .replace("{{scope_creep_instructions}}", () => scopeCreepInstructions)
+      .replace("{{convention_instructions}}", () => conventionInstructions)
+  );
 }
 
 export interface CachedSystemMessage {
@@ -159,6 +169,7 @@ export function buildUserMessage(
   chunkFiles?: string[],
   rankedContext?: string,
   priorContext?: PriorReviewContext,
+  searchScope: SearchScope = "remote",
 ): string {
   const parts: string[] = [];
 
@@ -248,8 +259,12 @@ export function buildUserMessage(
         'Do NOT report observations about these files as issues in "unchanged code" — they are actively changed in this PR ' +
         "and will be reviewed in a separate chunk. However, DO consider their presence when evaluating ticket compliance — " +
         "for example, if a ticket requires tests and test files appear in this list, that requirement is likely addressed " +
-        "even though the test diffs are not shown here. If searchCode returns results in these files, " +
-        "note that the search results may be stale (pre-merge content).\n",
+        "even though the test diffs are not shown here." +
+        (searchScope === "remote"
+          ? " If searchCode returns results in these files, " +
+            "note that the search results may be stale (pre-merge content)."
+          : "") +
+        "\n",
     );
     parts.push(otherPrFiles.map((f) => `- \`${f}\``).join("\n"));
   }

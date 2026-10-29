@@ -1288,3 +1288,45 @@ describe("runReview pass time budget", () => {
     expect((outcome.error as { id?: string }).id).toBe("REVIEW_PASS_TIMEOUT");
   });
 });
+
+describe("runReview with a local checkout", () => {
+  beforeEach(() => {
+    generateMock.mockReset();
+  });
+
+  function systemText(opts: Record<string, unknown>): string {
+    return (opts.system as { content: string }[]).map((m) => m.content).join("\n");
+  }
+
+  it("offers both tools from the checkout without a provider or sourceRef and drops the pre-merge note", async () => {
+    generateMock.mockResolvedValueOnce(makeValidResponse());
+    const checkout = { approximate: false, grep: vi.fn(), readFile: vi.fn() } as any;
+
+    await runReview(config, "diff", prMetadata, undefined, { checkout });
+
+    const opts = generateMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(Object.keys(opts.tools as object).sort()).toEqual(["getFileContext", "searchCode"]);
+    expect(systemText(opts)).not.toContain("may reflect pre-merge content");
+  });
+
+  it("keeps the pre-merge note for provider-backed tools", async () => {
+    generateMock.mockResolvedValueOnce(makeValidResponse());
+    const provider = { searchCode: vi.fn(), getFileContent: vi.fn() } as any;
+
+    await runReview(config, "diff", prMetadata, undefined, { provider, sourceRef: "feat" });
+
+    const opts = generateMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(Object.keys(opts.tools as object).sort()).toEqual(["getFileContext", "searchCode"]);
+    expect(systemText(opts)).toContain("may reflect pre-merge content");
+  });
+
+  it("still gives the skim tier no tools when a checkout exists", async () => {
+    generateMock.mockResolvedValueOnce(makeValidResponse());
+    const checkout = { approximate: false, grep: vi.fn(), readFile: vi.fn() } as any;
+
+    await runReview(config, "diff", prMetadata, undefined, { checkout, tier: "skim" });
+
+    const opts = generateMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(Object.keys((opts.tools as object | undefined) ?? {})).toEqual([]);
+  });
+});

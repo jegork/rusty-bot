@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { SearchUnavailableError } from "../agent/search-errors.js";
 import {
   createSearchCodeTool,
+  createGetFileContextTool,
   capSearchResults,
   capFileContent,
   MAX_SEARCH_RESULTS,
@@ -183,5 +184,43 @@ describe("createSearchCodeTool", () => {
   it("mentions the default-branch limitation in the description", () => {
     const tool = createSearchCodeTool({} as any);
     expect(tool.description).toContain("default branch");
+  });
+});
+
+describe("tool descriptions by search scope", () => {
+  const APPROXIMATE_SENTENCE = "merge of this PR into its target branch";
+
+  it("says search covers the PR head commit for a pr-head cache", () => {
+    const tool = createSearchCodeTool({ scope: "pr-head", approximate: false } as any);
+
+    expect(tool.description).toContain("head commit");
+    expect(tool.description).not.toContain("default branch");
+    expect(tool.description).not.toContain(APPROXIMATE_SENTENCE);
+  });
+
+  it("keeps the default-branch caveat for a remote cache", () => {
+    const tool = createSearchCodeTool({ scope: "remote", approximate: false } as any);
+
+    expect(tool.description).toContain("default branch");
+    expect(tool.description).not.toContain("head commit");
+  });
+
+  it("adds the merge-commit offset warning only when the checkout is approximate", () => {
+    const search = createSearchCodeTool({ scope: "pr-head", approximate: true } as any);
+    const file = createGetFileContextTool({ scope: "pr-head", approximate: true } as any);
+    const exactFile = createGetFileContextTool({ scope: "pr-head", approximate: false } as any);
+
+    expect(search.description).toContain(APPROXIMATE_SENTENCE);
+    expect(file.description).toContain(APPROXIMATE_SENTENCE);
+    expect(exactFile.description).not.toContain(APPROXIMATE_SENTENCE);
+  });
+
+  it("names the file source for each scope", () => {
+    const head = createGetFileContextTool({ scope: "pr-head", approximate: false } as any);
+    const remote = createGetFileContextTool({ scope: "remote", approximate: false } as any);
+
+    expect(head.description).toContain("PR head");
+    expect(remote.description).toContain("source branch");
+    expect(remote.description).not.toContain("PR head");
   });
 });

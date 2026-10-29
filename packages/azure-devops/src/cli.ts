@@ -32,6 +32,7 @@ import {
   filterAnchorableFindings,
   buildPriorContextFromReview,
   configureGlobalHttp,
+  resolveRepoCheckout,
 } from "@rusty-bot/core";
 import { AzureDevOpsProvider } from "./provider.js";
 
@@ -95,7 +96,7 @@ export function parseConfig(): {
   };
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   configureGlobalHttp();
 
   const { provider, config, failOnCritical, incrementalReview, env } = parseConfig();
@@ -105,6 +106,15 @@ async function main(): Promise<void> {
     { prId: metadata.id, source: metadata.sourceBranch, target: metadata.targetBranch },
     "reviewing PR",
   );
+
+  // the pipeline's shallow checkout is the merge commit; the PR head is fetched with System.AccessToken
+  const checkout = await resolveRepoCheckout({
+    repoPath: process.env.BUILD_SOURCESDIRECTORY,
+    headSha: metadata.headSha,
+    fetchAuthHeader: `bearer ${env.accessToken}`,
+  });
+  const fetchSourceFile = (path: string) =>
+    checkout ? checkout.readFile(path) : provider.getFileContent(path, metadata.sourceBranch);
 
   const conventionFile = await fetchConventionFile(
     (path, ref) => provider.getFileContent(path, ref),
@@ -303,9 +313,7 @@ async function main(): Promise<void> {
         "triage classification",
       );
 
-      const expandedDeep = await expandContext(deepReview, (path) =>
-        provider.getFileContent(path, metadata.sourceBranch),
-      );
+      const expandedDeep = await expandContext(deepReview, fetchSourceFile);
 
       review = await runCascadeReview(
         skim,
@@ -316,6 +324,7 @@ async function main(): Promise<void> {
         {
           provider,
           sourceRef: metadata.sourceBranch,
+          checkout: checkout ?? undefined,
           languageSummary,
           mcpServers,
           maxTokens: MAX_TOKENS,
@@ -335,9 +344,7 @@ async function main(): Promise<void> {
   }
 
   if (!review) {
-    const expanded = await expandContext(reviewable, (path) =>
-      provider.getFileContent(path, metadata.sourceBranch),
-    );
+    const expanded = await expandContext(reviewable, fetchSourceFile);
 
     review = await runMultiCallReview(
       expanded,
@@ -347,6 +354,7 @@ async function main(): Promise<void> {
       {
         provider,
         sourceRef: metadata.sourceBranch,
+        checkout: checkout ?? undefined,
         languageSummary,
         mcpServers,
         maxTokens: MAX_TOKENS,

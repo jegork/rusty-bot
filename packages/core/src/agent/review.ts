@@ -32,8 +32,9 @@ import type {
   PriorReviewContext,
 } from "../types.js";
 import type { OpenGrepFinding } from "../opengrep/types.js";
+import type { RepoCheckout } from "../repo/checkout.js";
 import { createSearchCodeTool, createGetFileContextTool } from "./tools.js";
-import { ToolCache } from "./tool-cache.js";
+import { ToolCache, checkoutCodeSource, providerCodeSource } from "./tool-cache.js";
 import { logger } from "../logger.js";
 
 const log = logger.child({ module: "review" });
@@ -498,18 +499,27 @@ export interface RunReviewOptions {
   deadlineAt?: number;
   /** search/file cache shared by every pass of one review; created at the multi-call entry points. */
   toolCache?: ToolCache;
+  /** local checkout of the PR; when set, search and file reads run on it instead of the provider API. */
+  checkout?: RepoCheckout;
+}
+
+export function createToolCache(options: RunReviewOptions): ToolCache | undefined {
+  if (options.checkout) return new ToolCache(checkoutCodeSource(options.checkout));
+  if (options.provider) {
+    return new ToolCache(providerCodeSource(options.provider, options.sourceRef ?? "HEAD"));
+  }
+  return undefined;
 }
 
 function buildTools(options?: RunReviewOptions): ToolSet {
-  if (options?.tier === "skim") return {};
+  if (!options || options.tier === "skim") return {};
 
-  const tools: ToolSet = {};
-  if (options?.provider) {
-    const cache = options.toolCache ?? new ToolCache(options.provider, options.sourceRef ?? "HEAD");
-    tools.searchCode = createSearchCodeTool(cache);
-    if (options.sourceRef) {
-      tools.getFileContext = createGetFileContextTool(cache);
-    }
+  const cache = options.toolCache ?? createToolCache(options);
+  if (!cache) return {};
+  const tools: ToolSet = { searchCode: createSearchCodeTool(cache) };
+  // the provider source needs a ref to read files at; a checkout always has its tree
+  if (cache.scope === "pr-head" || options.sourceRef) {
+    tools.getFileContext = createGetFileContextTool(cache);
   }
   return tools;
 }
@@ -527,7 +537,8 @@ export async function runReview(
     options?.deadlineAt === undefined ? Infinity : options.deadlineAt - Date.now(),
   );
   if (budgetMs <= 0) throw createReviewPassTimeoutError(budgetMs);
-  const systemPrompt = buildSystemPrompt(config, tier);
+  const searchScope = options?.toolCache?.scope ?? (options?.checkout ? "pr-head" : "remote");
+  const systemPrompt = buildSystemPrompt(config, tier, searchScope);
   const userMessage = buildUserMessage(
     diff,
     prMetadata,
@@ -538,6 +549,7 @@ export async function runReview(
     options?.chunkFiles,
     tier === "deep-review" ? options?.rankedContext : undefined,
     options?.priorContext,
+    searchScope,
   );
   const modelConfig = options?.modelConfig ?? resolveModelConfig();
   const modelName = getModelDisplayName(modelConfig);

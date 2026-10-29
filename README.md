@@ -9,6 +9,7 @@ Built on the [AI SDK](https://ai-sdk.dev) (TypeScript).
 - **5 review styles** — Strict, Balanced, Lenient, Roast, Thorough
 - **6 focus areas** — Security, Performance, Bugs, Code Style, Test Coverage, Documentation
 - **Triage-driven cascading review** — cheap model classifies files as skip/skim/deep-review, each tier gets an appropriate level of scrutiny
+- **Code search on the PR head** — in CI and the local CLI the agent's `searchCode` / `getFileContext` tools read the checkout (`git grep` / `git show` on the PR head commit), so code added or renamed in the PR is found; without a checkout they fall back to the platform API
 - **Tree-sitter context expansion** — hunks expand to enclosing function/class boundaries instead of fixed line counts (TS, JS, Python, Go, Java, Rust)
 - **Structured summary comments** — severity table, collapsible issue details, missing tests list, files reviewed
 - **Inline code comments** — findings posted directly on PR diff lines
@@ -111,6 +112,7 @@ jobs:
       contents: read
       issues: read
     steps:
+      - uses: actions/checkout@v4
       - uses: jegork/rusty-bot@v1
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -120,6 +122,8 @@ jobs:
           RUSTY_FOCUS_AREAS: security,bugs,performance
           RUSTY_FAIL_ON_CRITICAL: "true"
 ```
+
+The `actions/checkout` step gives the reviewer read-only search over the PR's code; without it the agent falls back to the GitHub code-search API, which only sees the default branch. The default `fetch-depth: 1` is enough — the Action fetches the PR head commit itself with the same `GITHUB_TOKEN`.
 
 **Required permissions** (set on the job, not the whole workflow):
 
@@ -178,6 +182,8 @@ steps:
       RUSTY_FAIL_ON_CRITICAL: "true"
 ```
 
+The pipeline's default `checkout: self` is used automatically: the reviewer searches the PR's code with `git grep` on the PR head commit, fetching that commit with `$(System.AccessToken)` when the shallow merge-commit checkout lacks it. `fetchDepth: 0` is **not** required.
+
 Set `RUSTY_LLM_MODEL`, `ANTHROPIC_API_KEY`, and other variables as pipeline variables in Azure DevOps. For Azure OpenAI with managed identity, replace the API key vars with `RUSTY_AZURE_RESOURCE_NAME` and `RUSTY_AZURE_DEPLOYMENT`.
 
 The task exits with code 1 when critical issues are found (configurable via `RUSTY_FAIL_ON_CRITICAL`), which can gate PR merges.
@@ -215,6 +221,7 @@ rusty-bot-review:
 - Updates the MR title/description when `RUSTY_RENAME_TITLE_TO_CONVENTIONAL=true` or `RUSTY_GENERATE_DESCRIPTION=true`
 - Resolves linked closing issues (`Closes #123`) via the GitLab `closes_issues` endpoint
 - Supports incremental review via head SHA — subsequent pushes only review the delta
+- Searches the MR's code in the job's checkout at `CI_PROJECT_DIR`, falling back to the GitLab API when it is missing
 
 The job exits with code 1 when critical issues are found (configurable via `RUSTY_FAIL_ON_CRITICAL`), which can gate MR merges when the job is on the merge train or required.
 
@@ -250,7 +257,7 @@ The CLI reuses the same review engine, prompts, triage, MCP wiring, convention-f
 
 The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, the matching provider API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.), `RUSTY_LLM_TRIAGE_MODEL`, `RUSTY_CASCADE_ENABLED`, `RUSTY_JUDGE_*`, `RUSTY_OPENGREP_RULES`, MCP server configs, etc. See the [Configuration](#configuration) section for the full list.
 
-**`searchCode` tool:** the CLI's `LocalGitProvider` shells out to `ripgrep` when available (preferred for speed and gitignore awareness) and falls back to `git grep` otherwise. PR-mutation methods (post comment, update title/description, etc.) are no-ops in the CLI since there is no PR to mutate.
+**`searchCode` tool:** the CLI searches the commit `--head` resolves to with `git grep`, the same backend the CI handlers use on their checkout. PR-mutation methods (post comment, update title/description, etc.) are no-ops in the CLI since there is no PR to mutate.
 
 ## Configuration
 

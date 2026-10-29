@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LocalGitProvider } from "../local-provider.js";
-import { gitEnv } from "../git-env.js";
+import { gitEnv } from "@rusty-bot/core";
 
 const execFileAsync = promisify(execFile);
 
@@ -218,6 +218,55 @@ describe("LocalGitProvider (integration)", () => {
       });
       expect(await provider.searchCode("")).toEqual([]);
       expect(await provider.searchCode("   ")).toEqual([]);
+    });
+  });
+
+  describe("checkout-backed search", () => {
+    it("searches the headRef commit, not the working tree on another branch", async () => {
+      const provider = new LocalGitProvider({
+        repoPath: repo.path,
+        baseRef: "main",
+        headRef: "feature",
+      });
+
+      const hits = await provider.searchCode("feature-only");
+      expect(hits).toEqual([
+        { file: "src/keep.ts", line: 1, content: "export const keep = 'feature-only';" },
+      ]);
+      expect(await provider.searchCode("main-only")).toEqual([]);
+    });
+
+    it("pins the checkout to the sha headRef resolved to", async () => {
+      const provider = new LocalGitProvider({
+        repoPath: repo.path,
+        baseRef: "main",
+        headRef: "feature",
+      });
+
+      const checkout = await provider.checkout();
+      expect(checkout.tree).toBe(repo.featureSha);
+      expect(checkout.approximate).toBe(false);
+      expect(await provider.checkout()).toBe(checkout);
+    });
+
+    it("treats an option-looking query as a literal search string", async () => {
+      const provider = new LocalGitProvider({
+        repoPath: repo.path,
+        baseRef: "main",
+        headRef: "HEAD",
+      });
+
+      expect(await provider.searchCode("--output=/tmp/rusty-cli-x")).toEqual([]);
+    });
+
+    it("rejects when headRef does not resolve to a commit", async () => {
+      const provider = new LocalGitProvider({
+        repoPath: repo.path,
+        baseRef: "main",
+        headRef: "no-such-branch",
+      });
+
+      await expect(provider.checkout()).rejects.toThrow();
     });
   });
 

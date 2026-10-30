@@ -34,6 +34,7 @@ import { deriveMergedRecommendation } from "./recommendation.js";
 import { resolveReviewPassModelConfigs } from "./model.js";
 import type { McpServerConfig } from "../mcp/types.js";
 import { connectMcpServers } from "../mcp/client.js";
+import { prepareCodeGraph, type CodeGraphIndex } from "../repo/codegraph.js";
 import { logger } from "../logger.js";
 
 export interface MultiCallReviewOptions extends RunReviewOptions {
@@ -47,6 +48,15 @@ function withReviewDeadline(options: RunReviewOptions): RunReviewOptions {
   const deadlineMs = readReviewDeadlineMs();
   if (deadlineMs === undefined || options.deadlineAt !== undefined) return options;
   return { ...options, deadlineAt: Date.now() + deadlineMs };
+}
+
+// one index per review, shared by every pass and chunk; the caller disposes it
+async function withCodeGraph(
+  options: RunReviewOptions,
+): Promise<{ options: RunReviewOptions; codeGraph: CodeGraphIndex | null }> {
+  if (options.codeGraph || !options.checkout) return { options, codeGraph: null };
+  const codeGraph = await prepareCodeGraph(options.checkout);
+  return { options: codeGraph ? { ...options, codeGraph } : options, codeGraph };
 }
 
 function withSharedToolCache(options: RunReviewOptions): RunReviewOptions {
@@ -439,7 +449,10 @@ export async function runMultiCallReview(
   options?: MultiCallReviewOptions,
 ): Promise<ReviewResult> {
   const { mcpServers, maxTokens: maxTokensOpt, ...unstampedOptions } = options ?? {};
-  const reviewOptions = withSharedToolCache(withReviewDeadline(unstampedOptions));
+  const { options: graphOptions, codeGraph } = await withCodeGraph(
+    withReviewDeadline(unstampedOptions),
+  );
+  const reviewOptions = withSharedToolCache(graphOptions);
   const maxTokens = maxTokensOpt ?? DEFAULT_MAX_TOKENS;
   const graphContextConfig = resolveGraphContextConfig();
 
@@ -548,6 +561,7 @@ export async function runMultiCallReview(
         logger.warn({ err }, "MCP disconnect error");
       }
     }
+    await codeGraph?.dispose();
   }
 }
 
@@ -560,7 +574,10 @@ export async function runCascadeReview(
   options?: MultiCallReviewOptions,
 ): Promise<ReviewResult> {
   const { mcpServers, maxTokens: maxTokensOpt, ...unstampedOptions } = options ?? {};
-  const reviewOptions = withSharedToolCache(withReviewDeadline(unstampedOptions));
+  const { options: graphOptions, codeGraph } = await withCodeGraph(
+    withReviewDeadline(unstampedOptions),
+  );
+  const reviewOptions = withSharedToolCache(graphOptions);
   const maxTokens = maxTokensOpt ?? DEFAULT_MAX_TOKENS;
   const graphContextConfig = resolveGraphContextConfig();
 
@@ -720,5 +737,6 @@ export async function runCascadeReview(
         logger.warn({ err }, "MCP disconnect error");
       }
     }
+    await codeGraph?.dispose();
   }
 }

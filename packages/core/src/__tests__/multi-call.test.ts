@@ -40,6 +40,9 @@ vi.mock("../agent/review.js", async (importOriginal) => ({
   runReview: vi.fn(async (_config, diff, _prMeta, _tickets, _opts) => makeMockReview(diff)),
 }));
 
+const prepareCodeGraphMock = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null));
+vi.mock("../repo/codegraph.js", () => ({ prepareCodeGraph: prepareCodeGraphMock }));
+
 const { runMultiCallReview, runCascadeReview, filterObservationsForPrFiles, mergeResults } =
   await import("../agent/multi-call.js");
 const { runReview } = await import("../agent/review.js");
@@ -1252,5 +1255,75 @@ describe("mergeResults scope creep", () => {
     const { mergeResults } = await import("../agent/multi-call.js");
     const merged = mergeResults([makeScoped({}), makeScoped({ scopeCreep: [] })], "m");
     expect(merged).not.toHaveProperty("scopeCreep");
+  });
+});
+
+describe("CodeGraph lifecycle", () => {
+  const checkout = { approximate: false, grep: vi.fn(), readFile: vi.fn() } as any;
+  let graph: { dispose: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    runReviewMock.mockReset();
+    runReviewMock.mockImplementation(async (_config, diff) => makeMockReview(diff));
+    graph = { dispose: vi.fn(async () => undefined) };
+    prepareCodeGraphMock.mockReset();
+    prepareCodeGraphMock.mockResolvedValue(graph);
+  });
+
+  it("prepares one index for every chunk of a multi-call review and disposes it after", async () => {
+    await runMultiCallReview(
+      [makePatch("big1.ts", 30_000), makePatch("big2.ts", 30_000)],
+      config,
+      prMetadata,
+      undefined,
+      { checkout },
+    );
+
+    expect(runReviewMock.mock.calls.length).toBeGreaterThan(1);
+    for (const call of runReviewMock.mock.calls) expect(call[4]?.codeGraph).toBe(graph);
+    expect(prepareCodeGraphMock).toHaveBeenCalledTimes(1);
+    expect(graph.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares the index between the skim and deep-review tiers and disposes it after", async () => {
+    await runCascadeReview(
+      [makePatch("tests/a.test.ts", 20)],
+      [makePatch("src/a.ts", 20)],
+      config,
+      prMetadata,
+      undefined,
+      { checkout },
+    );
+
+    for (const call of runReviewMock.mock.calls) expect(call[4]?.codeGraph).toBe(graph);
+    expect(graph.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("disposes the index when the review throws", async () => {
+    runReviewMock.mockRejectedValue(new Error("boom"));
+
+    await expect(
+      runMultiCallReview([makePatch("a.ts", 10)], config, prMetadata, undefined, { checkout }),
+    ).rejects.toThrow();
+    await expect(
+      runCascadeReview([], [makePatch("a.ts", 10)], config, prMetadata, undefined, { checkout }),
+    ).rejects.toThrow();
+    expect(graph.dispose).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not try to index without a local checkout", async () => {
+    await runMultiCallReview([makePatch("a.ts", 10)], config, prMetadata);
+
+    expect(prepareCodeGraphMock).not.toHaveBeenCalled();
+    expect(runReviewMock.mock.calls[0][4]?.codeGraph).toBeUndefined();
+  });
+
+  it("runs with the plain tools when indexing is unavailable", async () => {
+    prepareCodeGraphMock.mockResolvedValue(null);
+
+    await runMultiCallReview([makePatch("a.ts", 10)], config, prMetadata, undefined, { checkout });
+
+    expect(runReviewMock.mock.calls[0][4]?.codeGraph).toBeUndefined();
+    expect(runReviewMock.mock.calls[0][4]?.toolCache?.scope).toBe("pr-head");
   });
 });

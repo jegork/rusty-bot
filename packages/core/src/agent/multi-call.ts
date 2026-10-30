@@ -449,12 +449,13 @@ export async function runMultiCallReview(
   options?: MultiCallReviewOptions,
 ): Promise<ReviewResult> {
   const { mcpServers, maxTokens: maxTokensOpt, ...unstampedOptions } = options ?? {};
+  const maxTokens = maxTokensOpt ?? DEFAULT_MAX_TOKENS;
+  const graphContextConfig = resolveGraphContextConfig();
+  // acquired last before the try that disposes it, so nothing that can throw sits in between
   const { options: graphOptions, codeGraph } = await withCodeGraph(
     withReviewDeadline(unstampedOptions),
   );
   const reviewOptions = withSharedToolCache(graphOptions);
-  const maxTokens = maxTokensOpt ?? DEFAULT_MAX_TOKENS;
-  const graphContextConfig = resolveGraphContextConfig();
 
   let mcpDisconnect: (() => Promise<void>) | undefined;
   let resolvedOptions: RunReviewOptions = reviewOptions;
@@ -574,12 +575,13 @@ export async function runCascadeReview(
   options?: MultiCallReviewOptions,
 ): Promise<ReviewResult> {
   const { mcpServers, maxTokens: maxTokensOpt, ...unstampedOptions } = options ?? {};
+  const maxTokens = maxTokensOpt ?? DEFAULT_MAX_TOKENS;
+  const graphContextConfig = resolveGraphContextConfig();
+  // acquired last before the try that disposes it, so nothing that can throw sits in between
   const { options: graphOptions, codeGraph } = await withCodeGraph(
     withReviewDeadline(unstampedOptions),
   );
   const reviewOptions = withSharedToolCache(graphOptions);
-  const maxTokens = maxTokensOpt ?? DEFAULT_MAX_TOKENS;
-  const graphContextConfig = resolveGraphContextConfig();
 
   let mcpDisconnect: (() => Promise<void>) | undefined;
   let resolvedOptions: RunReviewOptions = reviewOptions;

@@ -265,6 +265,8 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 | `RUSTY_LLM_TRIAGE_MODEL` | LLM model for triage classification (enables cascading) | — |
 | `RUSTY_CASCADE_ENABLED` | explicitly enable/disable cascading (`true`/`false`) | auto (enabled when triage model is set) |
 | `RUSTY_OPENGREP_RULES` | OpenGrep config string (ruleset or path to rule file) | `auto` |
+| `RUSTY_CODEGRAPH` | experimental: when `true`, index the PR head with CodeGraph and give deep-review passes the `exploreCode` and `findSymbol` tools, see [CodeGraph Tools](#codegraph-tools-experimental) | `false` |
+| `RUSTY_CODEGRAPH_INDEX_TIMEOUT_MS` | how long indexing may take before the review continues without the CodeGraph tools | `120000` |
 | `RUSTY_GENERATE_DESCRIPTION` | generate PR description when empty/placeholder | `false` |
 | `RUSTY_RENAME_TITLE_TO_CONVENTIONAL` | rewrite non-conventional PR titles into Conventional Commits format | `false` |
 | `RUSTY_FLAG_SCOPE_CREEP` | list changes that fall outside the PR's stated intent in a "Scope Creep" section of the summary comment | `false` |
@@ -855,6 +857,25 @@ By default, when the LLM reviews a diff hunk, the surrounding context is expande
 5. If the enclosing scope exceeds 200 lines, or if the language is unsupported, it falls back to the previous ±10 fixed-line expansion
 
 The feature is automatic and requires no configuration. Unsupported languages (CSS, JSON, YAML, etc.) gracefully fall back to fixed-line expansion with zero overhead.
+
+### CodeGraph Tools (experimental)
+
+With `RUSTY_CODEGRAPH=true`, deep-review passes get two more tools backed by a [CodeGraph](https://www.npmjs.com/package/@colbymchenry/codegraph) symbol and call graph:
+
+- `findSymbol`: one symbol's source with its callers and callees
+- `exploreCode`: the symbols most relevant to a query, their source, and how they call each other
+
+The aim is to answer "where is this defined, who calls it, what breaks if it changes" in one call instead of a chain of `searchCode` and `getFileContext` round trips. Whether that makes reviews cheaper or better is being measured; the flag may become the default or the tools may be removed.
+
+How it works:
+
+- The index is built once per review from the PR head commit, in a temporary `git worktree` (the CI working tree is the merge commit, which the other tools deliberately do not read). The worktree is deleted when the review ends.
+- On a repository of ~230 files and ~34k lines of TypeScript, indexing takes about 3 seconds and 12 MB of temp disk.
+- It needs the `codegraph` binary on `PATH`. The Docker image ships it, which costs about +370 MB unpacked and +66 MB compressed (its Linux package bundles its own Node runtime); the size was accepted for the experiment by the maintainer on 2026-10-30. For the local CLI, install it with `npm install -g @colbymchenry/codegraph@1.6.2`. CodeGraph runs with `DO_NOT_TRACK=1`, so its telemetry and update check stay off.
+- Every failure degrades to today's tools: the flag is off, the binary is missing, the PR head could not be fetched, or indexing fails or exceeds `RUSTY_CODEGRAPH_INDEX_TIMEOUT_MS`. The skim tier never gets the tools.
+- Each review logs one event with `module: "codegraph"` and an `outcome` (`disabled`, `no-binary`, `approximate-checkout`, `index-failed`, `index-timeout`, `ready`), plus index time and file, symbol and edge counts.
+
+The tools stay off unless `RUSTY_CODEGRAPH=true`, even in the image that ships the binary; unset it or set it to anything else to turn them off.
 
 ### Ticket Integration
 

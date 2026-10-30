@@ -51,6 +51,12 @@ jobs:
           pip3 install --target="$HOME/.cache/opengrep/${OPENGREP_VERSION}" \
             charset-normalizer==3.4.1 chardet==5.2.0
 
+      # mirrors the Dockerfile; keep the version in sync with it. a failed
+      # install degrades to a review with the plain search tools
+      - name: Install CodeGraph
+        continue-on-error: true
+        run: npm install -g @colbymchenry/codegraph@1.6.2 && codegraph --version
+
       - name: Run Rusty Bot
         run: node packages/github-action/dist/cli.js
         env:
@@ -90,6 +96,8 @@ jobs:
           RUSTY_GRAPH_CONTEXT: "true"
           RUSTY_GRAPH_CONTEXT_TOKEN_BUDGET: "2000"
           RUSTY_GRAPH_CONTEXT_MAX_CANDIDATES: "8"
+          # experimental exploreCode / findSymbol tools on deep review (see README)
+          RUSTY_CODEGRAPH: "true"
           # per-step finishReason / toolCallCount logging. Surfaces tool-loop
           # behavior (e.g. a pass that spends its whole step budget on
           # verification searches).

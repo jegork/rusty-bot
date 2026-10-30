@@ -31,6 +31,22 @@ function readIndexTimeoutMs(): number {
   return Number.isFinite(n) && n >= 1 ? Math.floor(n) : DEFAULT_INDEX_TIMEOUT_MS;
 }
 
+// codegraph is third-party code that parses untrusted PR content, so it gets
+// only what it needs to run, never the provider or platform tokens in the job env
+const CODEGRAPH_ENV_KEYS = ["PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL"] as const;
+
+function codeGraphEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { DO_NOT_TRACK: "1" };
+  for (const key of CODEGRAPH_ENV_KEYS) {
+    if (process.env[key] !== undefined) env[key] = process.env[key];
+  }
+  // keep gitEnv's safe.directory and no-prompt settings for any git it runs
+  for (const [key, value] of Object.entries(gitEnv())) {
+    if (key.startsWith("GIT_CONFIG_") || key === "GIT_TERMINAL_PROMPT") env[key] = value;
+  }
+  return env;
+}
+
 function runCodeGraph(cwd: string, args: string[], timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
@@ -39,7 +55,7 @@ function runCodeGraph(cwd: string, args: string[], timeoutMs: number): Promise<s
       {
         cwd,
         // DO_NOT_TRACK turns off codegraph's usage telemetry and update check
-        env: gitEnv({ DO_NOT_TRACK: "1" }),
+        env: codeGraphEnv(),
         maxBuffer: MAX_BUFFER,
         timeout: timeoutMs,
         encoding: "utf8",

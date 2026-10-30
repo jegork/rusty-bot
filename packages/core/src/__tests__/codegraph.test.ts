@@ -223,13 +223,41 @@ describe("prepareCodeGraph", () => {
 
   it("gives up on an index that outlives its timeout and removes the worktree", async () => {
     const { path, featureSha } = await setupRepo();
-    await fakeCodeGraphOnPath("sleep 5");
+    await fakeCodeGraphOnPath("exec sleep 5");
     vi.stubEnv("RUSTY_CODEGRAPH_INDEX_TIMEOUT_MS", "1");
     const checkout = new RepoCheckout({ repoPath: path, tree: featureSha, approximate: false });
 
     expect(await prepareCodeGraph(checkout)).toBeNull();
     expect(loggedOutcome()).toBe("index-timeout");
     expect(await worktreeCount(path)).toBe(1);
+  });
+
+  it("hands codegraph no provider or platform secrets", async () => {
+    const { path, featureSha } = await setupRepo();
+    await fakeCodeGraphOnPath("mkdir -p .codegraph");
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-secret");
+    vi.stubEnv("GITHUB_TOKEN", "ghs-secret");
+    vi.stubEnv("SYSTEM_ACCESSTOKEN", "ado-secret");
+    vi.stubEnv("AZURE_FEDERATED_TOKEN_FILE", "/tmp/token");
+    const checkout = new RepoCheckout({ repoPath: path, tree: featureSha, approximate: false });
+
+    const graph = await prepareCodeGraph(checkout);
+    try {
+      const spawns = codeGraphSpawns();
+      expect(spawns.length).toBeGreaterThan(0);
+      for (const call of spawns) {
+        const env = (call[2] as { env: NodeJS.ProcessEnv }).env;
+        expect(env.OPENROUTER_API_KEY).toBeUndefined();
+        expect(env.GITHUB_TOKEN).toBeUndefined();
+        expect(env.SYSTEM_ACCESSTOKEN).toBeUndefined();
+        expect(env.AZURE_FEDERATED_TOKEN_FILE).toBeUndefined();
+        expect(env.PATH).toBe(process.env.PATH);
+        expect(env.DO_NOT_TRACK).toBe("1");
+        expect(env.GIT_CONFIG_KEY_0).toBe("safe.directory");
+      }
+    } finally {
+      await graph?.dispose();
+    }
   });
 
   it("removes the worktree when indexing fails", async () => {

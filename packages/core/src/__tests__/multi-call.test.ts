@@ -1299,6 +1299,15 @@ describe("CodeGraph lifecycle", () => {
     expect(graph.dispose).toHaveBeenCalledTimes(1);
   });
 
+  it("does not index a cascade that has no deep-review files", async () => {
+    await runCascadeReview([makePatch("tests/a.test.ts", 20)], [], config, prMetadata, undefined, {
+      checkout,
+    });
+
+    expect(prepareCodeGraphMock).not.toHaveBeenCalled();
+    for (const call of runReviewMock.mock.calls) expect(call[4]?.codeGraph).toBeUndefined();
+  });
+
   it("disposes the index when the review throws", async () => {
     runReviewMock.mockRejectedValue(new Error("boom"));
 

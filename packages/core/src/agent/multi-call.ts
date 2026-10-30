@@ -578,9 +578,11 @@ export async function runCascadeReview(
   const maxTokens = maxTokensOpt ?? DEFAULT_MAX_TOKENS;
   const graphContextConfig = resolveGraphContextConfig();
   // acquired last before the try that disposes it, so nothing that can throw sits in between
-  const { options: graphOptions, codeGraph } = await withCodeGraph(
-    withReviewDeadline(unstampedOptions),
-  );
+  // only deep-review passes get the codegraph tools, so a cascade without deep files skips the index
+  const { options: graphOptions, codeGraph } =
+    deepPatches.length > 0
+      ? await withCodeGraph(withReviewDeadline(unstampedOptions))
+      : { options: withReviewDeadline(unstampedOptions), codeGraph: null };
   const reviewOptions = withSharedToolCache(graphOptions);
 
   let mcpDisconnect: (() => Promise<void>) | undefined;

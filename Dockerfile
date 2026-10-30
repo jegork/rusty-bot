@@ -38,6 +38,13 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# experimental RUSTY_CODEGRAPH tools; keep the version in sync with the self-review workflow
+ARG CODEGRAPH_VERSION=1.6.2
+
+RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" \
+    && codegraph --version \
+    && npm cache clean --force
+
 RUN corepack enable
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./

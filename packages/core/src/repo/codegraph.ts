@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { MAX_FILE_CONTEXT_CHARS } from "../agent/tools.js";
 import { logger } from "../logger.js";
 import { runGit, type GitRunError, type RepoCheckout } from "./checkout.js";
-import { gitEnv } from "./git-env.js";
 
 const log = logger.child({ module: "codegraph" });
 
@@ -36,13 +35,17 @@ function readIndexTimeoutMs(): number {
 const CODEGRAPH_ENV_KEYS = ["PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL"] as const;
 
 function codeGraphEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { DO_NOT_TRACK: "1" };
+  // git config is set fresh, never copied: inherited GIT_CONFIG_* pairs and
+  // GIT_CONFIG_PARAMETERS can carry auth headers
+  const env: NodeJS.ProcessEnv = {
+    DO_NOT_TRACK: "1",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "safe.directory",
+    GIT_CONFIG_VALUE_0: "*",
+  };
   for (const key of CODEGRAPH_ENV_KEYS) {
     if (process.env[key] !== undefined) env[key] = process.env[key];
-  }
-  // keep gitEnv's safe.directory and no-prompt settings for any git it runs
-  for (const [key, value] of Object.entries(gitEnv())) {
-    if (key.startsWith("GIT_CONFIG_") || key === "GIT_TERMINAL_PROMPT") env[key] = value;
   }
   return env;
 }

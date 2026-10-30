@@ -239,6 +239,11 @@ describe("prepareCodeGraph", () => {
     vi.stubEnv("GITHUB_TOKEN", "ghs-secret");
     vi.stubEnv("SYSTEM_ACCESSTOKEN", "ado-secret");
     vi.stubEnv("AZURE_FEDERATED_TOKEN_FILE", "/tmp/token");
+    // credentials a CI job can carry as git config through the environment
+    vi.stubEnv("GIT_CONFIG_COUNT", "1");
+    vi.stubEnv("GIT_CONFIG_KEY_0", "http.extraheader");
+    vi.stubEnv("GIT_CONFIG_VALUE_0", "AUTHORIZATION: bearer inherited-secret");
+    vi.stubEnv("GIT_CONFIG_PARAMETERS", "'http.extraheader'='AUTHORIZATION: bearer params-secret'");
     const checkout = new RepoCheckout({ repoPath: path, tree: featureSha, approximate: false });
 
     const graph = await prepareCodeGraph(checkout);
@@ -253,7 +258,10 @@ describe("prepareCodeGraph", () => {
         expect(env.AZURE_FEDERATED_TOKEN_FILE).toBeUndefined();
         expect(env.PATH).toBe(process.env.PATH);
         expect(env.DO_NOT_TRACK).toBe("1");
+        expect(env.GIT_CONFIG_COUNT).toBe("1");
         expect(env.GIT_CONFIG_KEY_0).toBe("safe.directory");
+        expect(env.GIT_CONFIG_PARAMETERS).toBeUndefined();
+        expect(JSON.stringify(env)).not.toContain("secret");
       }
     } finally {
       await graph?.dispose();

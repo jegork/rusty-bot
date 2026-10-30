@@ -1305,6 +1305,7 @@ describe("CodeGraph lifecycle", () => {
     });
 
     expect(prepareCodeGraphMock).not.toHaveBeenCalled();
+    expect(runReviewMock).toHaveBeenCalled();
     for (const call of runReviewMock.mock.calls) expect(call[4]?.codeGraph).toBeUndefined();
   });
 

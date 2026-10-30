@@ -61,6 +61,11 @@ const TIER_PROMPT_SECTIONS = {
   },
 } as const;
 
+const CODE_GRAPH_TOOL_INSTRUCTIONS = `
+- **findSymbol**: show one symbol's source with its callers and callees, from this PR's head commit.
+- **exploreCode**: show the source of the symbols most relevant to a query and how they call each other, from this PR's head commit.
+Prefer findSymbol / exploreCode over repeated searchCode calls when you need definitions or callers.`;
+
 const SCOPE_CREEP_OUTPUT_REQUIREMENT =
   "- A scopeCreep list of changes that do not serve the PR's stated intent (see the scope creep rules below). Leave the array empty when every change is in scope.";
 
@@ -68,6 +73,7 @@ export function buildSystemPrompt(
   config: ReviewConfig,
   tier: ReviewTier = "deep-review",
   searchScope: SearchScope = "remote",
+  codeGraphTools = false,
 ): string {
   const base = loadTemplate("base.txt");
   const styleInstructions = buildStyleInstructions(config.style);
@@ -82,11 +88,15 @@ export function buildSystemPrompt(
     ? `${tierSections.extended_output_requirements}\n${SCOPE_CREEP_OUTPUT_REQUIREMENT}`
     : tierSections.extended_output_requirements;
   const scopeCreepInstructions = scopeCreep ? `\n${loadTemplate("scope-creep.txt")}` : "";
+  const toolInstructions =
+    codeGraphTools && tier === "deep-review"
+      ? tierSections.tool_instructions + CODE_GRAPH_TOOL_INSTRUCTIONS
+      : tierSections.tool_instructions;
 
   // replacer functions: a string replacement would expand $&, $1 etc. in substituted values
   return (
     base
-      .replace("{{tool_instructions}}", () => tierSections.tool_instructions)
+      .replace("{{tool_instructions}}", () => toolInstructions)
       .replace("{{extended_output_requirements}}", () => extendedOutputRequirements)
       .replace(
         "{{unverified_reference_qualifier}}",

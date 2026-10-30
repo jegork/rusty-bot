@@ -1,5 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
+import type { CodeGraphIndex } from "../repo/codegraph.js";
 import type { ToolCache } from "./tool-cache.js";
 import { SearchUnavailableError } from "./search-errors.js";
 
@@ -116,5 +117,41 @@ export function createGetFileContextTool(cache: ToolCache) {
       totalChars: z.number(),
     }),
     execute: async ({ path }) => capFileContent(await cache.getFileContent(path)),
+  });
+}
+
+const CODE_GRAPH_EMPTY_NOTE =
+  " content is null when CodeGraph found nothing; fall back to searchCode, and do not treat it as evidence that the code does not exist.";
+
+const codeGraphOutputSchema = z.object({ content: z.string().nullable() });
+
+export function createExploreCodeTool(cache: ToolCache, graph: CodeGraphIndex) {
+  return tool({
+    description:
+      "Show the source of the symbols most relevant to a query and how they call each other, " +
+      "from this PR's head commit. Use it to understand an area or check what depends on a " +
+      "changed symbol before reporting an impact finding. Matches symbol and file names " +
+      `lexically, so query with code terms. Returns up to ${MAX_FILE_CONTEXT_CHARS} characters;` +
+      CODE_GRAPH_EMPTY_NOTE,
+    inputSchema: z.object({
+      query: z.string().describe("symbol names, file names, or code terms for the area to explore"),
+    }),
+    outputSchema: codeGraphOutputSchema,
+    execute: async ({ query }) => cache.exploreCode(graph, query),
+  });
+}
+
+export function createFindSymbolTool(cache: ToolCache, graph: CodeGraphIndex) {
+  return tool({
+    description:
+      "Show one symbol's source with its callers and callees, from this PR's head commit. " +
+      "Use it to check whether a changed function's callers handle the new behaviour. " +
+      `Returns up to ${MAX_FILE_CONTEXT_CHARS} characters;` +
+      CODE_GRAPH_EMPTY_NOTE,
+    inputSchema: z.object({
+      name: z.string().describe("exact name of a function, class, method, type, or variable"),
+    }),
+    outputSchema: codeGraphOutputSchema,
+    execute: async ({ name }) => cache.findSymbol(graph, name),
   });
 }

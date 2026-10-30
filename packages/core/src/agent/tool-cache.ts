@@ -1,4 +1,5 @@
 import type { RepoCheckout } from "../repo/checkout.js";
+import type { CodeGraphIndex } from "../repo/codegraph.js";
 import type { CodeSearchResult, GitProvider } from "../types.js";
 import { SearchUnavailableError } from "./search-errors.js";
 
@@ -40,6 +41,8 @@ export class ToolCache {
     Promise<{ results: { file: string; line: number; content: string }[]; count: number }>
   >();
   private fileCache = new Map<string, Promise<{ content: string | null }>>();
+  private exploreCache = new Map<string, Promise<{ content: string | null }>>();
+  private symbolCache = new Map<string, Promise<{ content: string | null }>>();
   private searchUnavailableUntil = 0;
 
   readonly scope: SearchScope;
@@ -78,6 +81,22 @@ export class ToolCache {
     if (existing) return existing;
     const p = this.source.getFileContent(path).then((content) => ({ content }));
     this.fileCache.set(path, p);
+    return p;
+  }
+
+  exploreCode(graph: CodeGraphIndex, query: string) {
+    const existing = this.exploreCache.get(query);
+    if (existing) return existing;
+    const p = graph.explore(query).then((content) => ({ content }));
+    this.exploreCache.set(query, p);
+    return p;
+  }
+
+  findSymbol(graph: CodeGraphIndex, name: string) {
+    const existing = this.symbolCache.get(name);
+    if (existing) return existing;
+    const p = graph.node(name).then((content) => ({ content }));
+    this.symbolCache.set(name, p);
     return p;
   }
 }

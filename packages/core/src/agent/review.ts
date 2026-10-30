@@ -33,7 +33,13 @@ import type {
 } from "../types.js";
 import type { OpenGrepFinding } from "../opengrep/types.js";
 import type { RepoCheckout } from "../repo/checkout.js";
-import { createSearchCodeTool, createGetFileContextTool } from "./tools.js";
+import type { CodeGraphIndex } from "../repo/codegraph.js";
+import {
+  createSearchCodeTool,
+  createGetFileContextTool,
+  createExploreCodeTool,
+  createFindSymbolTool,
+} from "./tools.js";
 import { ToolCache, checkoutCodeSource, providerCodeSource } from "./tool-cache.js";
 import { logger } from "../logger.js";
 
@@ -501,6 +507,8 @@ export interface RunReviewOptions {
   toolCache?: ToolCache;
   /** local checkout of the PR; when set, search and file reads run on it instead of the provider API. */
   checkout?: RepoCheckout;
+  /** CodeGraph index of the PR head (RUSTY_CODEGRAPH); adds exploreCode and findSymbol to deep review. */
+  codeGraph?: CodeGraphIndex;
 }
 
 export function createToolCache(options: RunReviewOptions): ToolCache | undefined {
@@ -511,7 +519,7 @@ export function createToolCache(options: RunReviewOptions): ToolCache | undefine
   return undefined;
 }
 
-function buildTools(options?: RunReviewOptions): ToolSet {
+export function buildTools(options?: RunReviewOptions): ToolSet {
   if (!options || options.tier === "skim") return {};
 
   const cache = options.toolCache ?? createToolCache(options);
@@ -520,6 +528,10 @@ function buildTools(options?: RunReviewOptions): ToolSet {
   // the provider source needs a ref to read files at; a checkout always has its tree
   if (cache.scope === "pr-head" || options.sourceRef) {
     tools.getFileContext = createGetFileContextTool(cache);
+  }
+  if (options.codeGraph) {
+    tools.exploreCode = createExploreCodeTool(cache, options.codeGraph);
+    tools.findSymbol = createFindSymbolTool(cache, options.codeGraph);
   }
   return tools;
 }
@@ -538,7 +550,8 @@ export async function runReview(
   );
   if (budgetMs <= 0) throw createReviewPassTimeoutError(budgetMs);
   const searchScope = options?.toolCache?.scope ?? (options?.checkout ? "pr-head" : "remote");
-  const systemPrompt = buildSystemPrompt(config, tier, searchScope);
+  const builtInTools = buildTools(options);
+  const systemPrompt = buildSystemPrompt(config, tier, searchScope, "findSymbol" in builtInTools);
   const userMessage = buildUserMessage(
     diff,
     prMetadata,
@@ -554,7 +567,6 @@ export async function runReview(
   const modelConfig = options?.modelConfig ?? resolveModelConfig();
   const modelName = getModelDisplayName(modelConfig);
 
-  const builtInTools = buildTools(options);
   const extraTools = tier === "skim" ? {} : (options?.extraTools ?? {});
 
   const systemMessages = buildCachedSystemMessages(systemPrompt, {

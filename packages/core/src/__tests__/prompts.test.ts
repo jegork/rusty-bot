@@ -62,3 +62,34 @@ describe("search scope in prompts", () => {
     expect(buildSystemPrompt(config, "skim", "pr-head")).not.toContain(TOOL_NOTE);
   });
 });
+
+describe("CodeGraph tools in the system prompt", () => {
+  const PREFER = "Prefer findSymbol / exploreCode over repeated searchCode calls";
+
+  it("advertises them only when they are registered", () => {
+    const withTools = buildSystemPrompt(config, "deep-review", "pr-head", true);
+
+    expect(withTools).toContain("**findSymbol**");
+    expect(withTools).toContain("**exploreCode**");
+    expect(withTools).toContain(PREFER);
+  });
+
+  it("stays silent about them by default", () => {
+    for (const prompt of [
+      buildSystemPrompt(config, "deep-review"),
+      buildSystemPrompt(config, "deep-review", "pr-head"),
+      buildSystemPrompt(config, "deep-review", "pr-head", false),
+    ]) {
+      expect(prompt).not.toContain("findSymbol");
+      expect(prompt).not.toContain("exploreCode");
+    }
+  });
+
+  it("never offers them to the skim tier, even if asked to", () => {
+    const skim = buildSystemPrompt(config, "skim", "pr-head", true);
+
+    expect(skim).not.toContain("findSymbol");
+    expect(skim).not.toContain("exploreCode");
+    expect(skim).toContain("You have NO tools");
+  });
+});

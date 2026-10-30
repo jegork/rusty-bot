@@ -34,6 +34,7 @@ import { deriveMergedRecommendation } from "./recommendation.js";
 import { resolveReviewPassModelConfigs } from "./model.js";
 import type { McpServerConfig } from "../mcp/types.js";
 import { connectMcpServers } from "../mcp/client.js";
+import { prepareCodeGraph, type CodeGraphIndex } from "../repo/codegraph.js";
 import { logger } from "../logger.js";
 
 export interface MultiCallReviewOptions extends RunReviewOptions {
@@ -47,6 +48,15 @@ function withReviewDeadline(options: RunReviewOptions): RunReviewOptions {
   const deadlineMs = readReviewDeadlineMs();
   if (deadlineMs === undefined || options.deadlineAt !== undefined) return options;
   return { ...options, deadlineAt: Date.now() + deadlineMs };
+}
+
+// one index per review, shared by every pass and chunk; the caller disposes it
+async function withCodeGraph(
+  options: RunReviewOptions,
+): Promise<{ options: RunReviewOptions; codeGraph: CodeGraphIndex | null }> {
+  if (options.codeGraph || !options.checkout) return { options, codeGraph: null };
+  const codeGraph = await prepareCodeGraph(options.checkout);
+  return { options: codeGraph ? { ...options, codeGraph } : options, codeGraph };
 }
 
 function withSharedToolCache(options: RunReviewOptions): RunReviewOptions {
@@ -439,9 +449,13 @@ export async function runMultiCallReview(
   options?: MultiCallReviewOptions,
 ): Promise<ReviewResult> {
   const { mcpServers, maxTokens: maxTokensOpt, ...unstampedOptions } = options ?? {};
-  const reviewOptions = withSharedToolCache(withReviewDeadline(unstampedOptions));
   const maxTokens = maxTokensOpt ?? DEFAULT_MAX_TOKENS;
   const graphContextConfig = resolveGraphContextConfig();
+  // acquired last before the try that disposes it, so nothing that can throw sits in between
+  const { options: graphOptions, codeGraph } = await withCodeGraph(
+    withReviewDeadline(unstampedOptions),
+  );
+  const reviewOptions = withSharedToolCache(graphOptions);
 
   let mcpDisconnect: (() => Promise<void>) | undefined;
   let resolvedOptions: RunReviewOptions = reviewOptions;
@@ -548,6 +562,7 @@ export async function runMultiCallReview(
         logger.warn({ err }, "MCP disconnect error");
       }
     }
+    await codeGraph?.dispose();
   }
 }
 
@@ -560,9 +575,15 @@ export async function runCascadeReview(
   options?: MultiCallReviewOptions,
 ): Promise<ReviewResult> {
   const { mcpServers, maxTokens: maxTokensOpt, ...unstampedOptions } = options ?? {};
-  const reviewOptions = withSharedToolCache(withReviewDeadline(unstampedOptions));
   const maxTokens = maxTokensOpt ?? DEFAULT_MAX_TOKENS;
   const graphContextConfig = resolveGraphContextConfig();
+  // acquired last before the try that disposes it, so nothing that can throw sits in between
+  // only deep-review passes get the codegraph tools, so a cascade without deep files skips the index
+  const { options: graphOptions, codeGraph } =
+    deepPatches.length > 0
+      ? await withCodeGraph(withReviewDeadline(unstampedOptions))
+      : { options: withReviewDeadline(unstampedOptions), codeGraph: null };
+  const reviewOptions = withSharedToolCache(graphOptions);
 
   let mcpDisconnect: (() => Promise<void>) | undefined;
   let resolvedOptions: RunReviewOptions = reviewOptions;
@@ -720,5 +741,6 @@ export async function runCascadeReview(
         logger.warn({ err }, "MCP disconnect error");
       }
     }
+    await codeGraph?.dispose();
   }
 }

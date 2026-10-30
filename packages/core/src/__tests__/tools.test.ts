@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { buildTools, createToolCache } from "../agent/review.js";
 import { SearchUnavailableError } from "../agent/search-errors.js";
 import {
   createSearchCodeTool,
@@ -222,5 +223,73 @@ describe("tool descriptions by search scope", () => {
     expect(head.description).toContain("PR head");
     expect(remote.description).toContain("source branch");
     expect(remote.description).not.toContain("PR head");
+  });
+});
+
+describe("CodeGraph tools", () => {
+  const checkout = { approximate: false, grep: vi.fn(), readFile: vi.fn() } as any;
+
+  function fakeGraph() {
+    return {
+      dir: "/tmp/graph",
+      explore: vi.fn(async (query: string) => `explored ${query}`),
+      node: vi.fn(async (name: string) => (name === "missing" ? null : `node ${name}`)),
+      dispose: vi.fn(async () => undefined),
+    };
+  }
+
+  function run(tool: unknown, input: object) {
+    return (tool as { execute: (i: object, o: object) => Promise<any> }).execute(input, {});
+  }
+
+  it("leaves them out when no index was prepared", () => {
+    expect(Object.keys(buildTools({ checkout })).sort()).toEqual(["getFileContext", "searchCode"]);
+  });
+
+  it("never gives them to the skim tier", () => {
+    expect(buildTools({ checkout, codeGraph: fakeGraph(), tier: "skim" })).toEqual({});
+  });
+
+  it("registers both beside the existing tools when an index is present", () => {
+    const tools = buildTools({ checkout, codeGraph: fakeGraph() });
+
+    expect(Object.keys(tools).sort()).toEqual([
+      "exploreCode",
+      "findSymbol",
+      "getFileContext",
+      "searchCode",
+    ]);
+    expect(tools.findSymbol?.description).toContain("head commit");
+  });
+
+  it("memoises each query so a repeated call does not spawn codegraph again", async () => {
+    const codeGraph = fakeGraph();
+    const tools = buildTools({ checkout, codeGraph });
+
+    await run(tools.exploreCode, { query: "auth flow" });
+    const second = await run(tools.exploreCode, { query: "auth flow" });
+    await run(tools.findSymbol, { name: "login" });
+    await run(tools.findSymbol, { name: "login" });
+    await run(tools.findSymbol, { name: "logout" });
+
+    expect(second).toEqual({ content: "explored auth flow" });
+    expect(codeGraph.explore).toHaveBeenCalledTimes(1);
+    expect(codeGraph.node).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares the memo across passes that reuse one tool cache", async () => {
+    const codeGraph = fakeGraph();
+    const toolCache = createToolCache({ checkout, codeGraph })!;
+
+    await run(buildTools({ checkout, codeGraph, toolCache }).findSymbol, { name: "login" });
+    await run(buildTools({ checkout, codeGraph, toolCache }).findSymbol, { name: "login" });
+
+    expect(codeGraph.node).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports an empty result as null so the model falls back to searchCode", async () => {
+    const tools = buildTools({ checkout, codeGraph: fakeGraph() });
+
+    expect(await run(tools.findSymbol, { name: "missing" })).toEqual({ content: null });
   });
 });

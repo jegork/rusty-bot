@@ -66,6 +66,7 @@ The managed identity vars (`RUSTY_AZURE_*`) take priority over the API-key vars 
 | `RUSTY_REVIEW_ADAPTIVE_PASSES` | `true` | Ordinary deep-review chunks use fewer consensus passes (2) while large or security-sensitive chunks keep up to 3. Set to `false` to force every chunk through the full pass count. |
 | `RUSTY_CONSENSUS_PASSES` | `3` | Consensus pass count when the repo config does not set `consensusPasses`. Must be an integer from 1 to 5; anything else logs a warning and falls back to the default |
 | `RUSTY_CONSENSUS_THRESHOLD` | majority of passes | Votes a finding needs to survive when the repo config does not set `consensusThreshold`. Integer >= 1, clamped to the pass count; invalid values fall back to the default |
+| `RUSTY_CONSENSUS_SINGLE_VOTE_ARBITRATION` | `false` | When `true` and the judge is enabled, below-threshold findings go to the judge in a separate call instead of being dropped. Accepted findings are published; if the call fails, nothing new is published. |
 | `RUSTY_CLUSTER_LINE_WINDOW` | `5` | Max line distance for two findings to join one cluster. Non-negative number; invalid or empty values fall back to the default |
 | `RUSTY_CLUSTER_JACCARD` | `0.3` | Message Jaccard similarity needed to cluster findings of different categories. Must be 0-1; values outside fall back to the default |
 | `RUSTY_CLUSTER_CATEGORY_JACCARD` | `0.2` | Message Jaccard similarity needed to cluster findings of the same category. Must be 0-1; values outside fall back to the default |

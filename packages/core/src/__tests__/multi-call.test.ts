@@ -537,6 +537,34 @@ describe("filterObservationsForPrFiles", () => {
 });
 
 describe("mergeResults", () => {
+  it("carries arbitration candidates from every chunk and removes duplicates", () => {
+    const candidate = (file: string) => ({
+      file,
+      line: 1,
+      endLine: null,
+      severity: "warning" as const,
+      category: "bugs" as const,
+      message: `issue in ${file}`,
+      suggestedFix: "",
+      voteCount: 1,
+    });
+    const merged = mergeResults(
+      [
+        { ...makeMockReview("a"), arbitrationCandidates: [candidate("a.ts")] },
+        { ...makeMockReview("b"), arbitrationCandidates: [candidate("b.ts"), candidate("a.ts")] },
+        makeMockReview("c"),
+      ],
+      "test-model",
+    );
+
+    expect(merged.arbitrationCandidates?.map((f) => f.file)).toEqual(["a.ts", "b.ts"]);
+  });
+
+  it("omits arbitration candidates when no chunk has any", () => {
+    const merged = mergeResults([makeMockReview("a")], "test-model");
+    expect(merged).not.toHaveProperty("arbitrationCandidates");
+  });
+
   it("preserves elevated recommendation from consensus pass when merging with skim results", () => {
     const skimResult: ReviewResult = {
       summary: "Skim pass looks fine",

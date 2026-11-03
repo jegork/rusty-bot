@@ -14,6 +14,8 @@ Configure via env vars:
 | `RUSTY_CONSENSUS_PASSES`    | Number of independent review passes (set to `1` to disable) | `3`                                   |
 | `RUSTY_CONSENSUS_THRESHOLD` | Minimum votes to keep a finding                             | strict majority (`floor(passes/2)+1`) |
 
+Set `RUSTY_CONSENSUS_SINGLE_VOTE_ARBITRATION=true` (with the judge enabled) to have the judge rule on below-threshold findings instead of dropping them. Accepted findings are published with their real vote count. If the arbitration call fails, nothing new is published.
+
 You can also set per-pass review models with `RUSTY_REVIEW_MODELS`, for example:
 
 ```bash

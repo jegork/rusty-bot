@@ -1263,3 +1263,49 @@ describe("CLI config parsing", () => {
     expect(config.ignorePatterns).toEqual(["*.lock"]);
   });
 });
+
+describe("AzureDevOpsProvider risk label support", () => {
+  let provider: AzureDevOpsProvider;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    provider = createProvider();
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reads PR label names from the labels endpoint", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      mockFetchResponse({ value: [{ name: "risk:high" }, { name: "bug", id: "x" }] }),
+    );
+
+    await expect(provider.getLabels()).resolves.toEqual(["risk:high", "bug"]);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      `${BASE_URL}/pullRequests/${PULL_REQUEST_ID}/labels?${API_VERSION}`,
+      expect.anything(),
+    );
+  });
+
+  it("returns an empty list for a PR without labels", async () => {
+    fetchSpy.mockResolvedValueOnce(mockFetchResponse({ value: [] }));
+    await expect(provider.getLabels()).resolves.toEqual([]);
+  });
+
+  it("posts a standalone comment as an active bot-marked thread", async () => {
+    fetchSpy.mockResolvedValueOnce(mockFetchResponse({}));
+
+    await provider.postStandaloneComment("## Risk label disagreement");
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe(`${BASE_URL}/pullRequests/${PULL_REQUEST_ID}/threads?${API_VERSION}`);
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.status).toBe(1);
+    expect(body.threadContext).toBeUndefined();
+    expect(body.comments[0].content).toContain("<!-- rusty-bot-review -->");
+    expect(body.comments[0].content).toContain("## Risk label disagreement");
+  });
+});

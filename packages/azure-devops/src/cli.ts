@@ -3,6 +3,9 @@ import type {
   FocusArea,
   PriorReviewContext,
   ReviewConfig,
+  RiskLabelResult,
+  RiskLevel,
+  RiskPolicy,
   TicketRef,
 } from "@rusty-bot/core";
 import { ReviewStyleSchema } from "@rusty-bot/core";
@@ -33,6 +36,13 @@ import {
   buildPriorContextFromReview,
   configureGlobalHttp,
   resolveRepoCheckout,
+  readRiskLabel,
+  compareRiskLevels,
+  mergeRiskAssessments,
+  formatRiskDisagreementComment,
+  formatMissingRiskLabelComment,
+  fetchRepoConfig,
+  fetchRiskPrompt,
 } from "@rusty-bot/core";
 import { AzureDevOpsProvider } from "./provider.js";
 
@@ -45,6 +55,8 @@ export function parseConfig(): {
   config: ReviewConfig;
   failOnCritical: boolean;
   incrementalReview: boolean;
+  /** risk policy from the RUSTY_RISK_* env vars; the repo's `.rusty-bot.json` overrides it when present */
+  risk: RiskPolicy;
   env: { orgUrl: string; project: string; accessToken: string };
 } {
   const pullRequestId = process.env.SYSTEM_PULLREQUEST_PULLREQUESTID;
@@ -75,6 +87,11 @@ export function parseConfig(): {
   const failOnCritical = process.env.RUSTY_FAIL_ON_CRITICAL !== "false";
   const incrementalReview = process.env.RUSTY_INCREMENTAL_REVIEW !== "false";
   const flagScopeCreep = process.env.RUSTY_FLAG_SCOPE_CREEP === "true";
+  const risk: RiskPolicy = {
+    enabled: process.env.RUSTY_RISK_ASSESSMENT === "true",
+    labelPrefix: process.env.RUSTY_RISK_LABEL_PREFIX ?? "risk:",
+    requireLabel: process.env.RUSTY_RISK_REQUIRE_LABEL !== "false",
+  };
 
   return {
     provider: new AzureDevOpsProvider({
@@ -92,16 +109,69 @@ export function parseConfig(): {
     },
     failOnCritical,
     incrementalReview,
+    risk,
     env: { orgUrl, project, accessToken },
   };
+}
+
+// a label read that fails for transport reasons must not fail the PR, so the
+// caller treats null as "could not check" rather than "missing"
+async function readAuthorRiskLabel(
+  provider: AzureDevOpsProvider,
+  risk: RiskPolicy,
+): Promise<RiskLabelResult | null> {
+  if (!risk.enabled) return null;
+  try {
+    const labels = await provider.getLabels();
+    const result = readRiskLabel(labels, risk.labelPrefix);
+    log.info({ labels, result }, "read author risk label");
+    return result;
+  } catch (err) {
+    log.warn({ err }, "failed to read PR labels; skipping risk label enforcement");
+    return null;
+  }
+}
+
+async function enforceRiskLabel(
+  provider: AzureDevOpsProvider,
+  risk: RiskPolicy,
+  authorRisk: RiskLabelResult | null,
+): Promise<boolean> {
+  if (!risk.requireLabel || authorRisk === null || authorRisk.status === "ok") return true;
+  await provider.postStandaloneComment(formatMissingRiskLabelComment(authorRisk, risk.labelPrefix));
+  log.warn({ status: authorRisk.status }, "PR has no usable risk label");
+  return false;
 }
 
 export async function main(): Promise<void> {
   configureGlobalHttp();
 
-  const { provider, config, failOnCritical, incrementalReview, env } = parseConfig();
+  const { provider, config, failOnCritical, incrementalReview, risk: envRisk, env } = parseConfig();
 
   const metadata = await provider.getPRMetadata();
+
+  // the policy file is read from the target branch, so a PR cannot relax the gate that reviews it
+  const repoConfig = await fetchRepoConfig(
+    (path, ref) => provider.getFileContent(path, ref),
+    metadata.targetBranch,
+  );
+  const risk: RiskPolicy = repoConfig?.risk ?? envRisk;
+  config.assessRisk = risk.enabled;
+  config.riskReasons = risk.reasons;
+  if (risk.enabled && risk.promptFile) {
+    const prompt = await fetchRiskPrompt(
+      (path, ref) => provider.getFileContent(path, ref),
+      metadata.targetBranch,
+      risk.promptFile,
+    );
+    if (prompt) config.riskPrompt = prompt;
+  }
+  log.info(
+    { source: repoConfig?.risk ? "repo config" : "env", enabled: risk.enabled },
+    "resolved risk policy",
+  );
+
+  const authorRisk = await readAuthorRiskLabel(provider, risk);
   log.info(
     { prId: metadata.id, source: metadata.sourceBranch, target: metadata.targetBranch },
     "reviewing PR",
@@ -158,6 +228,11 @@ export async function main(): Promise<void> {
       { iteration: latestIteration },
       "latest iteration matches last reviewed iteration, skipping review",
     );
+    // relabelling creates no iteration, so a re-queued build lands here; the
+    // label still has to be checked or the missing-label failure would be sticky
+    if (!(await enforceRiskLabel(provider, risk, authorRisk))) {
+      process.exit(1);
+    }
     return;
   }
 
@@ -370,6 +445,16 @@ export async function main(): Promise<void> {
     ...(openGrepResult.error ? { error: openGrepResult.error } : {}),
   };
 
+  // an incremental pass only saw the new diff; the PR stays as risky as its riskiest part
+  if (incrementalUsed && priorContext?.riskAssessment) {
+    const merged = mergeRiskAssessments([
+      { ...review, riskAssessment: priorContext.riskAssessment },
+      review,
+    ]);
+    if (merged) review.riskAssessment = merged;
+  }
+
+  const authorRiskLevel: RiskLevel | null = authorRisk?.status === "ok" ? authorRisk.level : null;
   const criticalCount = review.findings.filter((f) => f.severity === "critical").length;
   const warningCount = review.findings.filter((f) => f.severity === "warning").length;
   log.info(
@@ -378,11 +463,13 @@ export async function main(): Promise<void> {
       critical: criticalCount,
       warnings: warningCount,
       recommendation: review.recommendation,
+      riskLevel: review.riskAssessment?.level,
+      authorRiskLevel,
     },
     "review complete",
   );
 
-  const summaryMarkdown = formatSummaryComment(review, { ticketResolution });
+  const summaryMarkdown = formatSummaryComment(review, { ticketResolution, authorRiskLevel });
   await provider.postSummaryComment(
     summaryMarkdown,
     latestIteration
@@ -417,8 +504,30 @@ export async function main(): Promise<void> {
     "posted summary and inline comments",
   );
 
+  // a higher bot rating is an argument, not a verdict: it opens an active thread
+  // the author has to answer or act on, and leaves the pipeline result alone
+  if (
+    review.riskAssessment &&
+    authorRiskLevel &&
+    compareRiskLevels(review.riskAssessment.level, authorRiskLevel) > 0
+  ) {
+    await provider.postStandaloneComment(
+      formatRiskDisagreementComment(authorRiskLevel, review.riskAssessment, risk.labelPrefix),
+    );
+    log.info(
+      { authorRiskLevel, botRiskLevel: review.riskAssessment.level },
+      "posted risk label disagreement",
+    );
+  }
+
+  const labelOk = await enforceRiskLabel(provider, risk, authorRisk);
+
   if (failOnCritical && criticalCount > 0) {
     log.warn({ criticalCount }, "failing pipeline due to critical issues");
+    process.exit(1);
+  }
+  if (!labelOk) {
+    log.warn("failing pipeline because the PR has no usable risk label");
     process.exit(1);
   }
 }

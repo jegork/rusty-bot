@@ -16,6 +16,7 @@ import { appendFileSync } from "node:fs";
 import { clusterFindings, clusterObservations, getClusterConfig } from "./cluster.js";
 import { runReview, type RunReviewOptions } from "./review.js";
 import { mergeMissingTests, mergeScopeCreep } from "./multi-call.js";
+import { mergeRiskAssessments } from "./risk.js";
 import { resolveReviewPassModelConfigs } from "./model.js";
 import { logger } from "../logger.js";
 
@@ -481,6 +482,7 @@ export async function runConsensusReview(
   );
 
   const scopeCreep = mergeScopeCreep(results);
+  const riskAssessment = mergeRiskAssessments(results);
   const summaries = results.map((r) => r.summary).filter(Boolean);
   const summary =
     summaries.length <= 1
@@ -498,6 +500,7 @@ export async function runConsensusReview(
     modelUsed: results[0]?.modelUsed ?? "unknown",
     tokenCount: totalTokens,
     ...(scopeCreep.length > 0 && { scopeCreep }),
+    ...(riskAssessment && { riskAssessment }),
     consensusMetadata: {
       passes,
       threshold,

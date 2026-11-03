@@ -32,8 +32,19 @@ export type {
   DroppedFinding,
   ConsensusMetadata,
   ScopeCreepItem,
+  RiskLevel,
+  RiskAxes,
+  RiskAssessment,
 } from "./types.js";
 
+export {
+  RISK_LEVELS,
+  deriveRiskLevel,
+  compareRiskLevels,
+  mergeRiskAssessments,
+  readRiskLabel,
+  type RiskLabelResult,
+} from "./agent/risk.js";
 export { SearchUnavailableError, type SearchUnavailableReason } from "./agent/search-errors.js";
 export { logger, flushLogger } from "./logger.js";
 export { configureGlobalHttp } from "./http-config.js";
@@ -47,5 +58,14 @@ export * from "./opengrep/index.js";
 export * from "./description/index.js";
 export * from "./title/index.js";
 export { fetchConventionFile } from "./convention-file.js";
+export {
+  fetchRepoConfig,
+  fetchRiskPrompt,
+  parseRepoConfig,
+  RepoConfigSchema,
+  REPO_CONFIG_FILENAME,
+  type RepoConfig,
+  type RiskPolicy,
+} from "./repo-config.js";
 export * from "./analysis/raw-findings.js";
 export * from "./repo/index.js";

@@ -1155,3 +1155,47 @@ describe("formatSummaryComment scope creep", () => {
     expect(result.indexOf("Scope Creep")).toBeLessThan(result.indexOf("Missing Tests"));
   });
 });
+
+describe("risk section", () => {
+  const assessment = {
+    scope: "everyone" as const,
+    detectability: "silent" as const,
+    reversibility: "repair" as const,
+    reasons: ["external-contract", "migration"],
+    justification: "The export payload sent to the warehouse changed without a test.",
+    level: "high" as const,
+  };
+
+  it("renders the three answers, reasons and justification right after the status line", () => {
+    const result = formatSummaryComment(makeReview({ riskAssessment: assessment }));
+    expect(result).toContain("## Risk: High");
+    expect(result).toContain(
+      "| Who is affected if it is wrong? | every user, all data or the whole service |",
+    );
+    expect(result).toContain("| How would we find out? | nobody notices |");
+    expect(result).toContain(
+      "| Does a redeploy undo it? | data must be repaired or has already left |",
+    );
+    expect(result).toContain("**Reasons:** `external-contract`, `migration`");
+    expect(result).toContain(assessment.justification);
+    expect(result.indexOf("**Status:**")).toBeLessThan(result.indexOf("## Risk"));
+    expect(result.indexOf("## Risk")).toBeLessThan(result.indexOf("## Overview"));
+  });
+
+  it("names the author's level in the heading only when it differs", () => {
+    const review = makeReview({ riskAssessment: assessment });
+    expect(formatSummaryComment(review, { authorRiskLevel: "medium" })).toContain(
+      "## Risk: High (author says Medium)",
+    );
+    expect(formatSummaryComment(review, { authorRiskLevel: "high" })).toContain("## Risk: High\n");
+    expect(formatSummaryComment(review, { authorRiskLevel: null })).toContain("## Risk: High\n");
+  });
+
+  it("omits the reasons line when there are none and the section when there is no assessment", () => {
+    const result = formatSummaryComment(
+      makeReview({ riskAssessment: { ...assessment, reasons: [] } }),
+    );
+    expect(result).not.toContain("**Reasons:**");
+    expect(formatSummaryComment(makeReview())).not.toContain("## Risk");
+  });
+});

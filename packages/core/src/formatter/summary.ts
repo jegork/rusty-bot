@@ -9,7 +9,9 @@ import type {
   TicketComplianceStatus,
   TicketResolutionStatus,
   ScopeCreepItem,
+  RiskLevel,
 } from "../types.js";
+import { buildRiskSection } from "./risk.js";
 import { stripPriorContextMarkers } from "../agent/prior-context.js";
 
 const SEVERITY_ORDER: Severity[] = ["critical", "warning", "suggestion"];
@@ -187,7 +189,7 @@ function buildTicketFetchMessage(status: TicketResolutionStatus): string {
 
 export function formatSummaryComment(
   review: ReviewResult,
-  options?: { ticketResolution?: TicketResolutionStatus },
+  options?: { ticketResolution?: TicketResolutionStatus; authorRiskLevel?: RiskLevel | null },
 ): string {
   const counts = countBySeverity(review.findings);
   const totalIssues = review.findings.length;
@@ -211,6 +213,10 @@ export function formatSummaryComment(
     `**Status:** ${totalIssues} Issues Found${statusSuffix} | **Recommendation:** ${RECOMMENDATION_TEXT[review.recommendation]}`,
   );
   lines.push("");
+
+  if (review.riskAssessment) {
+    lines.push(buildRiskSection(review.riskAssessment, options?.authorRiskLevel));
+  }
 
   if (review.triageStats) {
     lines.push(buildTriageSection(review.triageStats));

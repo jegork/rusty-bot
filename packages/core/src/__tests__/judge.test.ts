@@ -800,6 +800,219 @@ describe("judgeReviewResult", () => {
   });
 });
 
+describe("judgeReviewResult below-threshold arbitration", () => {
+  const JUDGE = { enabled: true, threshold: 6 };
+
+  beforeEach(() => {
+    generateMock.mockReset();
+  });
+
+  function evaluations(...confidences: number[]) {
+    return {
+      object: {
+        evaluations: confidences.map((confidence, index) => ({
+          index,
+          confidence,
+          reasoning: "because",
+        })),
+      },
+      usage: { totalTokens: 100 },
+    };
+  }
+
+  function dropped(finding: Finding) {
+    return {
+      file: finding.file,
+      line: finding.line,
+      severity: finding.severity,
+      message: finding.message,
+      voteCount: 1,
+    };
+  }
+
+  function makeElevatedReview(findings: Finding[], candidates: Finding[]): ReviewResult {
+    return {
+      ...makeReviewResult(findings),
+      arbitrationCandidates: candidates,
+      droppedFindings: candidates.map(dropped),
+      consensusMetadata: {
+        passes: 2,
+        threshold: 2,
+        effectiveThreshold: 2,
+        degraded: false,
+        agreementRate: null,
+        recommendationElevated: true,
+        passRecommendations: ["address_before_merge", "address_before_merge"],
+        failedPasses: 0,
+      },
+    };
+  }
+
+  function systemPromptOf(callIndex: number): string {
+    const opts = generateMock.mock.calls[callIndex][0] as { system: { content: string }[] };
+    return opts.system.map((m) => m.content).join("\n");
+  }
+
+  function userPromptOf(callIndex: number): string {
+    return (generateMock.mock.calls[callIndex][0] as { prompt: string }).prompt;
+  }
+
+  it("publishes an accepted candidate with its vote count and removes it from dropped", async () => {
+    const leak = makeFinding({
+      line: 2,
+      severity: "critical",
+      message: "leaks secrets",
+      voteCount: 1,
+    });
+    const noise = makeFinding({ line: 3, message: "style nit", voteCount: 1 });
+    generateMock.mockResolvedValueOnce(evaluations(9, 2));
+
+    const result = await judgeReviewResult(makeElevatedReview([], [leak, noise]), PATCHES, JUDGE);
+
+    expect(result.findings).toEqual([leak]);
+    expect(result.findings[0].voteCount).toBe(1);
+    expect(result.arbitratedCount).toBe(1);
+    expect(result.droppedFindings?.map((d) => d.message)).toEqual(["style nit"]);
+    expect(result.recommendation).toBe("critical_issues");
+    expect(result.consensusMetadata?.recommendationElevated).toBe(false);
+    expect(result).not.toHaveProperty("arbitrationCandidates");
+  });
+
+  it("clears the elevation when the judge rejects every candidate", async () => {
+    const noise = makeFinding({ message: "style nit", voteCount: 1 });
+    generateMock.mockResolvedValueOnce(evaluations(1));
+
+    const result = await judgeReviewResult(makeElevatedReview([], [noise]), PATCHES, JUDGE);
+
+    expect(result.findings).toEqual([]);
+    expect(result.arbitratedCount).toBe(0);
+    expect(result.recommendation).toBe("looks_good");
+    expect(result.consensusMetadata?.recommendationElevated).toBe(false);
+    // stays visible as a filtered finding
+    expect(result.droppedFindings).toHaveLength(1);
+  });
+
+  it("publishes nothing new and keeps the elevation when the arbitration call throws", async () => {
+    const survivor = makeFinding({ message: "agreed bug", voteCount: 2 });
+    const candidate = makeFinding({ line: 2, message: "single vote", voteCount: 1 });
+    generateMock
+      .mockResolvedValueOnce(evaluations(9))
+      .mockRejectedValueOnce(new Error("model unavailable"));
+
+    const result = await judgeReviewResult(
+      makeElevatedReview([survivor], [candidate]),
+      PATCHES,
+      JUDGE,
+    );
+
+    expect(result.findings).toEqual([survivor]);
+    expect(result.arbitratedCount).toBeUndefined();
+    expect(result.droppedFindings).toHaveLength(1);
+    expect(result.consensusMetadata?.recommendationElevated).toBe(true);
+    // the main verdict was healthy, so the footer must not claim the judge failed
+    expect(result.judgeStatus).toBe("ok");
+  });
+
+  it("does not accept a candidate the judge returned no evaluation for", async () => {
+    const answered = makeFinding({ message: "answered", voteCount: 1 });
+    const skipped = makeFinding({ line: 2, message: "skipped", voteCount: 1 });
+    generateMock.mockResolvedValueOnce(evaluations(9));
+
+    const result = await judgeReviewResult(
+      makeElevatedReview([], [answered, skipped]),
+      PATCHES,
+      JUDGE,
+    );
+
+    expect(result.findings).toEqual([answered]);
+  });
+
+  it("treats all-out-of-range evaluations as an arbitration failure", async () => {
+    const candidate = makeFinding({ voteCount: 1 });
+    generateMock.mockResolvedValueOnce({
+      object: { evaluations: [{ index: 5, confidence: 10, reasoning: "wrong index" }] },
+      usage: { totalTokens: 100 },
+    });
+
+    const result = await judgeReviewResult(makeElevatedReview([], [candidate]), PATCHES, JUDGE);
+
+    expect(result.findings).toEqual([]);
+    expect(result.consensusMetadata?.recommendationElevated).toBe(true);
+  });
+
+  it("uses the arbitration rubric only for candidates and shows them the kept findings", async () => {
+    const kept = makeFinding({ message: "kept agreed bug", voteCount: 2 });
+    const rejected = makeFinding({ line: 2, message: "rejected agreed bug", voteCount: 2 });
+    const candidate = makeFinding({ line: 3, message: "single vote", voteCount: 1 });
+    generateMock.mockResolvedValueOnce(evaluations(9, 1)).mockResolvedValueOnce(evaluations(9));
+
+    await judgeReviewResult(makeElevatedReview([kept, rejected], [candidate]), PATCHES, JUDGE);
+
+    expect(generateMock).toHaveBeenCalledTimes(2);
+    expect(systemPromptOf(0)).not.toContain("fewer reviewers");
+    expect(systemPromptOf(1)).toContain("fewer reviewers");
+    expect(userPromptOf(1)).toContain("kept agreed bug");
+    expect(userPromptOf(1)).not.toContain("rejected agreed bug");
+    expect(userPromptOf(0)).not.toContain("Already reported");
+  });
+
+  it("adds the arbitration tokens to the judge total", async () => {
+    const survivor = makeFinding({ voteCount: 2 });
+    const candidate = makeFinding({ line: 2, message: "single vote", voteCount: 1 });
+    generateMock.mockResolvedValueOnce(evaluations(9)).mockResolvedValueOnce(evaluations(9));
+
+    const result = await judgeReviewResult(
+      makeElevatedReview([survivor], [candidate]),
+      PATCHES,
+      JUDGE,
+    );
+
+    expect(result.judgeTokenCount).toBe(200);
+  });
+
+  it("still arbitrates when the main judge call failed open", async () => {
+    const survivor = makeFinding({ message: "agreed bug", voteCount: 2 });
+    const candidate = makeFinding({ line: 2, message: "single vote", voteCount: 1 });
+    generateMock
+      .mockRejectedValueOnce(new Error("model unavailable"))
+      .mockResolvedValueOnce(evaluations(9));
+
+    const result = await judgeReviewResult(
+      makeElevatedReview([survivor], [candidate]),
+      PATCHES,
+      JUDGE,
+    );
+
+    expect(result.findings.map((f) => f.message)).toEqual(["agreed bug", "single vote"]);
+    expect(result.judgeStatus).toBe("failed");
+    expect(result.judgeTokenCount).toBeUndefined();
+  });
+
+  it("makes no extra call and keeps today's result shape without candidates", async () => {
+    const survivor = makeFinding({ voteCount: 2 });
+    generateMock.mockResolvedValueOnce(evaluations(9));
+
+    const result = await judgeReviewResult(makeReviewResult([survivor]), PATCHES, JUDGE);
+
+    expect(generateMock).toHaveBeenCalledTimes(1);
+    expect(result).not.toHaveProperty("arbitratedCount");
+  });
+
+  it("does not arbitrate when the judge is disabled", async () => {
+    const candidate = makeFinding({ voteCount: 1 });
+
+    const result = await judgeReviewResult(makeElevatedReview([], [candidate]), PATCHES, {
+      enabled: false,
+      threshold: 6,
+    });
+
+    expect(generateMock).not.toHaveBeenCalled();
+    expect(result.findings).toEqual([]);
+    expect(result.droppedFindings).toHaveLength(1);
+    expect(result).not.toHaveProperty("arbitrationCandidates");
+  });
+});
+
 describe("judgeFindings jsonPromptInjection forwarding", () => {
   beforeEach(() => {
     generateMock.mockReset();

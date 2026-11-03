@@ -714,6 +714,7 @@ RUSTY_CONSENSUS_THRESHOLD=3
 |---------|-------------|---------|
 | `RUSTY_CONSENSUS_PASSES` | Number of independent review passes (1 = disabled) | `3` |
 | `RUSTY_CONSENSUS_THRESHOLD` | Minimum votes to keep a finding (unset = simple majority) | `ceil(passes/2)` |
+| `RUSTY_CONSENSUS_SINGLE_VOTE_ARBITRATION` | When `true`, the judge rules on findings below the threshold instead of them being dropped outright. Needs `RUSTY_JUDGE_ENABLED=true`. See [below-threshold arbitration](#below-threshold-arbitration) | `false` |
 
 **How it works:**
 
@@ -732,6 +733,15 @@ Consensus uses `Promise.allSettled` rather than `Promise.all`, so a single flaky
 - If fewer than `consensusThreshold` passes succeed, the review throws an `AggregateError` containing every pass failure.
 
 **Cost:** With the default 3 passes, LLM cost per review triples. Combine with the judge pass (using a cheaper model) to offset costs.
+
+#### Below-threshold arbitration
+
+Strict consensus loses real bugs that only one model catches: with two passes, the threshold requires both to report the same issue in similar words. With `RUSTY_CONSENSUS_SINGLE_VOTE_ARBITRATION=true` and the judge enabled, findings below the threshold go to the judge in a separate call with a stricter rubric. The judge decides on each finding's merits and also sees the findings already being published, so a reworded duplicate is rejected.
+
+- **Accepted** findings are published like any other, keep their real `voteCount`, and count towards the recommendation. That includes `RUSTY_FAIL_ON_CRITICAL`: a confirmed single-vote critical finding fails the job.
+- **Rejected** findings stay listed under "Filtered findings". If the recommendation was only elevated because of them, the elevation is cleared, since the judge has now evaluated them.
+- **Failure publishes nothing new.** If the arbitration call fails, or skips a finding, those findings are not published and the existing elevated-concerns behaviour applies. This is deliberately the opposite of the main judge pass, which keeps findings when it fails: these findings have already lost the vote.
+- **Cost:** one extra judge call per review that has below-threshold findings. The call is logged as `judge pass complete` with `arbitration: true`; set `RUSTY_LOG_JUDGE_SCORES=true` to see each score.
 
 Set `consensusPasses` to `1` to disable consensus voting and get the original single-pass behavior with zero overhead.
 

@@ -520,5 +520,12 @@ export async function runConsensusReview(
       failedPasses,
     },
     droppedFindings: droppedFindings.length > 0 ? droppedFindings : undefined,
+    ...(process.env.RUSTY_CONSENSUS_SINGLE_VOTE_ARBITRATION === "true" &&
+      droppedClusters.length > 0 && {
+        arbitrationCandidates: droppedClusters.map((c) => ({
+          ...c.representative,
+          voteCount: c.voteCount,
+        })),
+      }),
   };
 }

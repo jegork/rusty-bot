@@ -258,6 +258,35 @@ describe("runConsensusReview", () => {
     expect(result.droppedFindings![0].voteCount).toBe(1);
   });
 
+  it("offers below-threshold findings for arbitration only when the flag is true", async () => {
+    const consensusConfig = { ...config, consensusPasses: 3 };
+
+    const off = await runConsensusReview([], consensusConfig, prMetadata, "diff content");
+    expect(off.arbitrationCandidates).toBeUndefined();
+
+    vi.stubEnv("RUSTY_CONSENSUS_SINGLE_VOTE_ARBITRATION", "1");
+    const notLiteralTrue = await runConsensusReview(
+      [],
+      consensusConfig,
+      prMetadata,
+      "diff content",
+    );
+    expect(notLiteralTrue.arbitrationCandidates).toBeUndefined();
+
+    vi.stubEnv("RUSTY_CONSENSUS_SINGLE_VOTE_ARBITRATION", "true");
+    const on = await runConsensusReview([], consensusConfig, prMetadata, "diff content");
+    vi.unstubAllEnvs();
+
+    expect(on.arbitrationCandidates).toHaveLength(1);
+    expect(on.arbitrationCandidates![0].file).toBe("src/other.ts");
+    expect(on.arbitrationCandidates![0].voteCount).toBe(1);
+    // the full finding, not the trimmed dropped shape, so it can be published
+    expect(on.arbitrationCandidates![0]).toHaveProperty("category");
+    expect(on.arbitrationCandidates![0]).toHaveProperty("suggestedFix");
+    expect(on.findings.map((f) => f.file)).not.toContain("src/other.ts");
+    expect(on.droppedFindings).toHaveLength(1);
+  });
+
   it("omits droppedFindings when all clusters meet threshold", async () => {
     const { runReview } = await import("../agent/review.js");
     (runReview as ReturnType<typeof vi.fn>)

@@ -216,6 +216,16 @@ export function mergeResults(results: ReviewResult[], modelUsed: string): Review
     }
   }
 
+  const candidatesSeen = new Set<string>();
+  const dedupedCandidates = results
+    .flatMap((r) => r.arbitrationCandidates ?? [])
+    .filter((f) => {
+      const key = `${f.file}:${f.line}:${f.message}`;
+      if (candidatesSeen.has(key)) return false;
+      candidatesSeen.add(key);
+      return true;
+    });
+
   const summaries = results.map((r) => r.summary).filter(Boolean);
   const summary =
     summaries.length === 1
@@ -248,6 +258,7 @@ export function mergeResults(results: ReviewResult[], modelUsed: string): Review
     ...(triageStats ? { triageStats } : {}),
     ...(consensusMetadata && { consensusMetadata }),
     ...(dedupedDropped.length > 0 && { droppedFindings: dedupedDropped }),
+    ...(dedupedCandidates.length > 0 && { arbitrationCandidates: dedupedCandidates }),
   };
 }
 

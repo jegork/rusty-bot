@@ -112,6 +112,11 @@ export interface ReviewResult extends ReviewOutput {
   judgeStatus?: "ok" | "failed";
   consensusMetadata?: ConsensusMetadata;
   droppedFindings?: DroppedFinding[];
+  /** below-threshold findings awaiting the judge; consumed by judgeReviewResult.
+   * only set when RUSTY_CONSENSUS_SINGLE_VOTE_ARBITRATION is on */
+  arbitrationCandidates?: Finding[];
+  /** number of below-threshold findings the judge confirmed and published */
+  arbitratedCount?: number;
   openGrepStats?: OpenGrepStats;
   /** out-of-scope changes; only populated when `ReviewConfig.flagScopeCreep` is on */
   scopeCreep?: ScopeCreepItem[];

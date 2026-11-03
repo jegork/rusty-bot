@@ -1,11 +1,12 @@
 import type { ToolSet } from "ai";
 import type { z } from "zod";
 import {
-  ReviewOutputSchema,
-  ScopeCreepReviewOutputSchema,
+  selectDeepReviewOutputSchema,
+  type RiskAssessmentOutput,
   SkimReviewOutputSchema,
 } from "./schema.js";
 import { buildSystemPrompt, buildUserMessage, buildCachedSystemMessages } from "./prompts.js";
+import { deriveRiskLevel } from "./risk.js";
 import {
   resolveModelConfig,
   resolveModelConfigWithOverride,
@@ -30,6 +31,7 @@ import type {
   ReviewResult,
   GitProvider,
   PriorReviewContext,
+  RiskAssessment,
 } from "../types.js";
 import type { OpenGrepFinding } from "../opengrep/types.js";
 import type { RepoCheckout } from "../repo/checkout.js";
@@ -577,9 +579,10 @@ export async function runReview(
   const schema =
     tier === "skim"
       ? SkimReviewOutputSchema
-      : config.flagScopeCreep === true
-        ? ScopeCreepReviewOutputSchema
-        : ReviewOutputSchema;
+      : selectDeepReviewOutputSchema({
+          scopeCreep: config.flagScopeCreep === true,
+          riskAssessment: config.assessRisk === true,
+        });
 
   const rawModelSettings = options?.modelSettings ?? resolveModelSettings("review");
   const modelSettings = applyModelConstraints(modelConfig, rawModelSettings);
@@ -793,5 +796,14 @@ export async function runReview(
     ...("scopeCreep" in parsed && {
       scopeCreep: (parsed as Record<string, unknown>).scopeCreep as ReviewResult["scopeCreep"],
     }),
+    ...("riskAssessment" in parsed && {
+      riskAssessment: withRiskLevel(
+        (parsed as Record<string, unknown>).riskAssessment as RiskAssessmentOutput,
+      ),
+    }),
   };
+}
+
+function withRiskLevel(output: RiskAssessmentOutput): RiskAssessment {
+  return { ...output, level: deriveRiskLevel(output) };
 }

@@ -51,4 +51,5 @@ Summary writing rules:
 {{style_instructions}}
 {{focus_instructions}}
 {{scope_creep_instructions}}
+{{risk_assessment_instructions}}
 {{convention_instructions}}

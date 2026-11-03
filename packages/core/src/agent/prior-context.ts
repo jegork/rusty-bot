@@ -1,4 +1,9 @@
-import type { PriorReviewContext, PriorReviewContextFinding, ReviewResult } from "../types.js";
+import type {
+  PriorReviewContext,
+  PriorReviewContextFinding,
+  ReviewResult,
+  RiskAssessment,
+} from "../types.js";
 
 const MARKER_PREFIX = "<!-- rusty-bot:context:";
 const MARKER_SUFFIX = " -->";
@@ -16,6 +21,13 @@ const ELLIPSIS = "…";
 const RECOMMENDATIONS = new Set(["looks_good", "address_before_merge", "critical_issues"]);
 
 const SEVERITIES = new Set(["suggestion", "warning", "critical"]);
+
+const RISK_LEVELS = new Set(["low", "medium", "high"]);
+const RISK_SCOPES = new Set(["one_user", "one_feature", "everyone"]);
+const RISK_DETECTABILITIES = new Set(["immediate", "monitored", "silent"]);
+const RISK_REVERSIBILITIES = new Set(["redeploy", "rerun", "repair"]);
+const RISK_REASONS_COUNT_CAP = 20;
+const RISK_JUSTIFICATION_CHAR_CAP = 1_000;
 
 function truncateMessage(message: string): string {
   if (message.length <= FINDING_MESSAGE_CHAR_CAP) return message;
@@ -38,6 +50,18 @@ export function buildPriorContextFromReview(review: ReviewResult): PriorReviewCo
       message: f.message,
     })),
     filesReviewed: review.filesReviewed,
+    ...(review.riskAssessment ? { riskAssessment: review.riskAssessment } : {}),
+  };
+}
+
+function truncateRiskAssessment(assessment: RiskAssessment): RiskAssessment {
+  return {
+    ...assessment,
+    reasons: assessment.reasons.slice(0, RISK_REASONS_COUNT_CAP),
+    justification:
+      assessment.justification.length <= RISK_JUSTIFICATION_CHAR_CAP
+        ? assessment.justification
+        : assessment.justification.slice(0, RISK_JUSTIFICATION_CHAR_CAP) + ELLIPSIS,
   };
 }
 
@@ -55,6 +79,7 @@ export function encodePriorReviewContext(ctx: PriorReviewContext): string {
     ...(ctx.filesReviewed && ctx.filesReviewed.length > 0
       ? { filesReviewed: ctx.filesReviewed.slice(0, FILES_REVIEWED_COUNT_CAP) }
       : {}),
+    ...(ctx.riskAssessment ? { riskAssessment: truncateRiskAssessment(ctx.riskAssessment) } : {}),
   };
   const json = JSON.stringify(truncated);
   const b64 = Buffer.from(json, "utf-8").toString("base64");
@@ -73,6 +98,24 @@ function isFinding(value: unknown): value is PriorReviewContextFinding {
   );
 }
 
+function isRiskAssessment(value: unknown): value is RiskAssessment {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.level === "string" &&
+    RISK_LEVELS.has(v.level) &&
+    typeof v.scope === "string" &&
+    RISK_SCOPES.has(v.scope) &&
+    typeof v.detectability === "string" &&
+    RISK_DETECTABILITIES.has(v.detectability) &&
+    typeof v.reversibility === "string" &&
+    RISK_REVERSIBILITIES.has(v.reversibility) &&
+    Array.isArray(v.reasons) &&
+    v.reasons.every((r) => typeof r === "string") &&
+    typeof v.justification === "string"
+  );
+}
+
 function isContext(value: unknown): value is PriorReviewContext {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
@@ -88,6 +131,8 @@ function isContext(value: unknown): value is PriorReviewContext {
     if (!Array.isArray(v.filesReviewed)) return false;
     if (!v.filesReviewed.every((p) => typeof p === "string")) return false;
   }
+  // same rule for the risk assessment: absent is fine, malformed means tampered
+  if (v.riskAssessment !== undefined && !isRiskAssessment(v.riskAssessment)) return false;
   return true;
 }
 

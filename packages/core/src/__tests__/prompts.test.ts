@@ -93,3 +93,25 @@ describe("CodeGraph tools in the system prompt", () => {
     expect(skim).toContain("You have NO tools");
   });
 });
+
+describe("risk assessment in the system prompt", () => {
+  it("asks for the riskAssessment object only when enabled, and only on the deep tier", () => {
+    const on = { ...config, assessRisk: true };
+    expect(buildSystemPrompt(on, "deep-review")).toContain("A riskAssessment object");
+    expect(buildSystemPrompt(on, "deep-review")).toContain("Risk assessment is enabled.");
+    expect(buildSystemPrompt(on, "skim")).not.toContain("riskAssessment");
+    expect(buildSystemPrompt(config, "deep-review")).not.toContain("riskAssessment");
+    expect(buildSystemPrompt(config, "deep-review")).not.toContain(
+      "{{risk_assessment_instructions}}",
+    );
+  });
+
+  it("keeps the scope creep requirement when both optional sections are on", () => {
+    const prompt = buildSystemPrompt(
+      { ...config, assessRisk: true, flagScopeCreep: true },
+      "deep-review",
+    );
+    expect(prompt).toContain("A scopeCreep list");
+    expect(prompt).toContain("A riskAssessment object");
+  });
+});

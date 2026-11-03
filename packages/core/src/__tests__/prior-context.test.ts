@@ -283,3 +283,59 @@ describe("buildPriorContextFromReview", () => {
     ]);
   });
 });
+
+describe("risk assessment carry-forward", () => {
+  const riskAssessment = {
+    scope: "one_feature" as const,
+    detectability: "silent" as const,
+    reversibility: "rerun" as const,
+    reasons: ["money-math"],
+    justification: "a missing amount reads as zero",
+    level: "high" as const,
+  };
+
+  it("roundtrips the assessment and omits it when absent", () => {
+    const ctx = makeContext({ riskAssessment });
+    expect(extractPriorReviewContext(encodePriorReviewContext(ctx))).toEqual(ctx);
+    const without = extractPriorReviewContext(encodePriorReviewContext(makeContext()));
+    expect(without).not.toHaveProperty("riskAssessment");
+  });
+
+  it("caps the reasons list and the justification", () => {
+    const ctx = makeContext({
+      riskAssessment: {
+        ...riskAssessment,
+        reasons: Array.from({ length: 40 }, (_, i) => `r${i}`),
+        justification: "x".repeat(5_000),
+      },
+    });
+    const decoded = extractPriorReviewContext(encodePriorReviewContext(ctx));
+    expect(decoded?.riskAssessment?.reasons).toHaveLength(20);
+    expect(decoded?.riskAssessment?.justification.length).toBeLessThan(1_100);
+  });
+
+  it("rejects the whole marker when the assessment is malformed", () => {
+    const json = JSON.stringify({
+      ...makeContext(),
+      riskAssessment: { ...riskAssessment, level: "critical" },
+    });
+    const marker = `<!-- rusty-bot:context:${Buffer.from(json).toString("base64")} -->`;
+    expect(extractPriorReviewContext(marker)).toBeNull();
+  });
+
+  it("carries the review's assessment into the prior context", () => {
+    const review = {
+      summary: "s",
+      recommendation: "looks_good",
+      findings: [],
+      observations: [],
+      ticketCompliance: [],
+      missingTests: [],
+      filesReviewed: ["a.ts"],
+      modelUsed: "m",
+      tokenCount: 1,
+      riskAssessment,
+    } satisfies ReviewResult;
+    expect(buildPriorContextFromReview(review).riskAssessment).toEqual(riskAssessment);
+  });
+});

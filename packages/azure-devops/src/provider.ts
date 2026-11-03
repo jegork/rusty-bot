@@ -19,6 +19,7 @@ import type { z } from "zod";
 import {
   AdoPullRequestSchema,
   AdoIterationsSchema,
+  AdoLabelsSchema,
   AdoChangesSchema,
   AdoThreadsSchema,
   AdoSearchResultSchema,
@@ -561,6 +562,29 @@ export class AzureDevOpsProvider implements GitProvider {
         },
       );
     }
+  }
+
+  /** PR labels (shown as tags in the Azure DevOps UI) */
+  async getLabels(): Promise<string[]> {
+    const data = await this.request(
+      `${this.baseUrl}/pullRequests/${this.pullRequestId}/labels?${API_VERSION}`,
+      AdoLabelsSchema,
+    );
+    return data.value.map((label) => label.name);
+  }
+
+  /** post a bot-marked thread that is not the summary: it is closed by the next run like the others */
+  async postStandaloneComment(markdown: string): Promise<void> {
+    await this.fetchApi(
+      `${this.baseUrl}/pullRequests/${this.pullRequestId}/threads?${API_VERSION}`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          comments: [{ parentCommentId: 0, content: `${BOT_MARKER}\n${markdown}`, commentType: 1 }],
+          status: 1,
+        }),
+      },
+    );
   }
 
   async getLinkedWorkItemIds(): Promise<string[]> {

@@ -10,6 +10,9 @@ export type {
   MissingTestItem,
   ScopeCreepItem,
   ReviewOutput,
+  RiskLevel,
+  RiskAxes,
+  RiskAssessment,
 } from "./agent/schema.js";
 
 import type {
@@ -21,6 +24,7 @@ import type {
   Severity,
   ReviewOutput,
   ScopeCreepItem,
+  RiskAssessment,
 } from "./agent/schema.js";
 
 export interface DroppedFinding {
@@ -115,6 +119,8 @@ export interface ReviewResult extends ReviewOutput {
   openGrepStats?: OpenGrepStats;
   /** out-of-scope changes; only populated when `ReviewConfig.flagScopeCreep` is on */
   scopeCreep?: ScopeCreepItem[];
+  /** whole-PR risk assessment; only populated when `ReviewConfig.assessRisk` is on */
+  riskAssessment?: RiskAssessment;
 }
 
 export interface ReviewConfig {
@@ -127,6 +133,8 @@ export interface ReviewConfig {
   generateDescription?: boolean;
   /** ask the deep-review tier to list changes that fall outside the PR's stated intent */
   flagScopeCreep?: boolean;
+  /** ask the deep-review tier to assess the PR's risk on scope, detectability and reversibility */
+  assessRisk?: boolean;
 }
 
 export interface PRMetadata {
@@ -173,6 +181,9 @@ export interface PriorReviewContext {
    * commits and were already approved. optional for backward compat with markers
    * encoded before this field existed; decoders treat missing as undefined. */
   filesReviewed?: string[];
+  /** risk assessment of the prior pass, so an incremental re-review that only
+   * sees the new diff cannot lower the PR-wide level below what was already seen */
+  riskAssessment?: RiskAssessment;
 }
 
 export interface Hunk {

@@ -1,0 +1,12 @@
+Risk assessment is enabled. Judge the PR as a whole, not file by file, by answering three questions about what happens if the change is wrong:
+- scope: who is affected? "one_user" when one user or one screen; "one_feature" when the users of one feature, one client or one dossier; "everyone" when every user, all stored data, or the whole service (including anything that can exhaust memory or crash the process for everyone).
+- detectability: how would the defect be found? "immediate" when the user sees it right away; "monitored" when it shows up in logs, metrics or a failing job; "silent" when nobody would notice: wrong numbers presented as correct, a job that reports success while doing nothing, data exposed to someone who should not see it.
+- reversibility: does a redeploy undo it? "redeploy" when yes; "rerun" when a job or migration must be re-run as well; "repair" when stored data must be repaired by hand or has already left the system.
+
+Rules:
+- Intent does not lower risk. A refactor, rename or cleanup that touches a risky area is as risky as a feature there.
+- Changes to what a user is allowed to see or do, to stored data in bulk, to a contract with an external system, or to figures presented as correct are usually "silent" and often "repair".
+- Adding a nullable column, changing copy, styling, tests, docs or tooling is usually "one_user" or "one_feature", "immediate" and "redeploy".
+- Answer from the diff you reviewed. Do not speculate about files you did not see.
+
+Report the three answers as the `riskAssessment` object with a `reasons` list of short tags naming what drives the risk (for example migration, authz, external-contract, money-math, resource, prompt, infra, deps, ui-only) and a `justification` of one paragraph that points at concrete changes in the diff. Risk assessment is informational: do not report it as a finding, and do not let it affect the merge recommendation.

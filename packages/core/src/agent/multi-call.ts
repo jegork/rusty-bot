@@ -31,6 +31,7 @@ import {
 import { runConsensusReview } from "./consensus.js";
 import { judgeReviewResult, resolveJudgeConfig } from "./judge.js";
 import { deriveMergedRecommendation } from "./recommendation.js";
+import { mergeRiskAssessments } from "./risk.js";
 import { resolveReviewPassModelConfigs } from "./model.js";
 import type { McpServerConfig } from "../mcp/types.js";
 import { connectMcpServers } from "../mcp/client.js";
@@ -233,6 +234,7 @@ export function mergeResults(results: ReviewResult[], modelUsed: string): Review
 
   const recommendation = deriveMergedRecommendation(dedupedFindings, elevatedRecommendations);
   const scopeCreep = mergeScopeCreep(results);
+  const riskAssessment = mergeRiskAssessments(results);
 
   return {
     summary,
@@ -245,6 +247,7 @@ export function mergeResults(results: ReviewResult[], modelUsed: string): Review
     modelUsed,
     tokenCount: totalTokens,
     ...(scopeCreep.length > 0 && { scopeCreep }),
+    ...(riskAssessment && { riskAssessment }),
     ...(triageStats ? { triageStats } : {}),
     ...(consensusMetadata && { consensusMetadata }),
     ...(dedupedDropped.length > 0 && { droppedFindings: dedupedDropped }),

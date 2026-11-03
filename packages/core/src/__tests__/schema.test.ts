@@ -3,6 +3,9 @@ import { z } from "zod";
 import {
   ReviewOutputSchema,
   ScopeCreepReviewOutputSchema,
+  RiskReviewOutputSchema,
+  ScopeCreepRiskReviewOutputSchema,
+  selectDeepReviewOutputSchema,
   SkimReviewOutputSchema,
 } from "../agent/schema.js";
 import { TriageOutputSchema } from "../triage/schema.js";
@@ -97,5 +100,51 @@ describe("ScopeCreepReviewOutputSchema strict mode compatibility", () => {
   it("does not leak scopeCreep into the base schema", () => {
     const jsonSchema = z.toJSONSchema(ReviewOutputSchema) as JsonSchemaObject;
     expect(jsonSchema.required).not.toContain("scopeCreep");
+  });
+});
+
+describe("risk assessment output schemas", () => {
+  it("adds riskAssessment as a required strict-mode property", () => {
+    const jsonSchema = z.toJSONSchema(RiskReviewOutputSchema) as JsonSchemaObject;
+    const violations = collectStrictViolations(jsonSchema);
+    expect(violations, violations.join("\n")).toEqual([]);
+    expect(jsonSchema.required).toContain("riskAssessment");
+    expect(jsonSchema.required).not.toContain("scopeCreep");
+  });
+
+  it("combines with scope creep without losing either field", () => {
+    const jsonSchema = z.toJSONSchema(ScopeCreepRiskReviewOutputSchema) as JsonSchemaObject;
+    expect(collectStrictViolations(jsonSchema)).toEqual([]);
+    expect(jsonSchema.required).toEqual(expect.arrayContaining(["riskAssessment", "scopeCreep"]));
+  });
+
+  it("selects the schema matching the enabled sections", () => {
+    expect(selectDeepReviewOutputSchema({})).toBe(ReviewOutputSchema);
+    expect(selectDeepReviewOutputSchema({ scopeCreep: true })).toBe(ScopeCreepReviewOutputSchema);
+    expect(selectDeepReviewOutputSchema({ riskAssessment: true })).toBe(RiskReviewOutputSchema);
+    expect(selectDeepReviewOutputSchema({ scopeCreep: true, riskAssessment: true })).toBe(
+      ScopeCreepRiskReviewOutputSchema,
+    );
+  });
+
+  it("does not leak riskAssessment into the base or skim schema", () => {
+    expect((z.toJSONSchema(ReviewOutputSchema) as JsonSchemaObject).required).not.toContain(
+      "riskAssessment",
+    );
+    expect((z.toJSONSchema(SkimReviewOutputSchema) as JsonSchemaObject).required).not.toContain(
+      "riskAssessment",
+    );
+  });
+
+  it("lets the model answer the three questions but never pick the level", () => {
+    const props = (z.toJSONSchema(RiskReviewOutputSchema) as JsonSchemaObject).properties
+      ?.riskAssessment;
+    expect(Object.keys(props?.properties ?? {}).sort()).toEqual([
+      "detectability",
+      "justification",
+      "reasons",
+      "reversibility",
+      "scope",
+    ]);
   });
 });

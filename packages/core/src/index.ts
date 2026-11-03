@@ -32,8 +32,19 @@ export type {
   DroppedFinding,
   ConsensusMetadata,
   ScopeCreepItem,
+  RiskLevel,
+  RiskAxes,
+  RiskAssessment,
 } from "./types.js";
 
+export {
+  RISK_LEVELS,
+  deriveRiskLevel,
+  compareRiskLevels,
+  mergeRiskAssessments,
+  readRiskLabel,
+  type RiskLabelResult,
+} from "./agent/risk.js";
 export { SearchUnavailableError, type SearchUnavailableReason } from "./agent/search-errors.js";
 export { logger, flushLogger } from "./logger.js";
 export { configureGlobalHttp } from "./http-config.js";

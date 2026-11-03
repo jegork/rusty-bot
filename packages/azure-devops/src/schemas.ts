@@ -81,6 +81,10 @@ export const AdoSearchResultSchema = z.object({
     .optional(),
 });
 
+export const AdoLabelsSchema = z.object({
+  value: z.array(z.object({ name: z.string() })),
+});
+
 export const AdoPrWorkItemsSchema = z.object({
   value: z.array(
     z.object({

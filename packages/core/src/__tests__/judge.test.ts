@@ -925,6 +925,54 @@ describe("judgeReviewResult below-threshold arbitration", () => {
     );
 
     expect(result.findings).toEqual([answered]);
+    // the skipped candidate was never judged, so the elevation it backs must stand
+    expect(result.consensusMetadata?.recommendationElevated).toBe(true);
+    expect(result.recommendation).toBe("address_before_merge");
+    expect(result.droppedFindings?.map((d) => d.message)).toEqual(["skipped"]);
+  });
+
+  it("keeps the elevation when the judge returns an empty evaluation list", async () => {
+    const candidate = makeFinding({ voteCount: 1 });
+    generateMock.mockResolvedValueOnce({
+      object: { evaluations: [] },
+      usage: { totalTokens: 100 },
+    });
+
+    const result = await judgeReviewResult(makeElevatedReview([], [candidate]), PATCHES, JUDGE);
+
+    expect(result.findings).toEqual([]);
+    expect(result.recommendation).toBe("address_before_merge");
+    expect(result.consensusMetadata?.recommendationElevated).toBe(true);
+  });
+
+  it("states the configured threshold in the arbitration rubric", async () => {
+    const candidate = makeFinding({ voteCount: 1 });
+    generateMock.mockResolvedValueOnce(evaluations(9));
+
+    await judgeReviewResult(makeElevatedReview([], [candidate]), PATCHES, {
+      enabled: true,
+      threshold: 8,
+    });
+
+    expect(systemPromptOf(0)).toContain("score 8 or higher");
+    expect(systemPromptOf(0)).not.toContain("score 7 or higher");
+  });
+
+  it("marks arbitration scores in the per-finding score log", async () => {
+    const spy = vi.spyOn(logger, "info");
+    vi.stubEnv("RUSTY_LOG_JUDGE_SCORES", "true");
+    const survivor = makeFinding({ voteCount: 2 });
+    const candidate = makeFinding({ line: 2, message: "single vote", voteCount: 1 });
+    generateMock.mockResolvedValueOnce(evaluations(9)).mockResolvedValueOnce(evaluations(9));
+
+    await judgeReviewResult(makeElevatedReview([survivor], [candidate]), PATCHES, JUDGE);
+    vi.unstubAllEnvs();
+
+    const scoreLogs = spy.mock.calls
+      .filter(([, msg]) => msg === "judge per-finding scores")
+      .map(([o]) => (o as { arbitration: boolean }).arbitration);
+    expect(scoreLogs).toEqual([false, true]);
+    spy.mockRestore();
   });
 
   it("treats all-out-of-range evaluations as an arbitration failure", async () => {

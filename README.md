@@ -740,7 +740,7 @@ Strict consensus loses real bugs that only one model catches: with two passes, t
 
 - **Accepted** findings are published like any other, keep their real `voteCount`, and count towards the recommendation. That includes `RUSTY_FAIL_ON_CRITICAL`: a confirmed single-vote critical finding fails the job.
 - **Rejected** findings stay listed under "Filtered findings". If the recommendation was only elevated because of them, the elevation is cleared, since the judge has now evaluated them.
-- **Failure publishes nothing new.** If the arbitration call fails, or skips a finding, those findings are not published and the existing elevated-concerns behaviour applies. This is deliberately the opposite of the main judge pass, which keeps findings when it fails: these findings have already lost the vote.
+- **Failure publishes nothing new.** If the arbitration call fails, or skips a finding, those findings are not published and the elevation stays, since they were never judged. Findings the judge did evaluate in the same call still count. This is deliberately the opposite of the main judge pass, which keeps findings when it fails: these findings have already lost the vote.
 - **Cost:** one extra judge call per review that has below-threshold findings. The call is logged as `judge pass complete` with `arbitration: true`; set `RUSTY_LOG_JUDGE_SCORES=true` to see each score.
 
 Set `consensusPasses` to `1` to disable consensus voting and get the original single-pass behavior with zero overhead.

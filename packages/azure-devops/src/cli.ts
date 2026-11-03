@@ -42,6 +42,7 @@ import {
   formatRiskDisagreementComment,
   formatMissingRiskLabelComment,
   fetchRepoConfig,
+  fetchRiskPrompt,
 } from "@rusty-bot/core";
 import { AzureDevOpsProvider } from "./provider.js";
 
@@ -157,7 +158,14 @@ export async function main(): Promise<void> {
   const risk: RiskPolicy = repoConfig?.risk ?? envRisk;
   config.assessRisk = risk.enabled;
   config.riskReasons = risk.reasons;
-  config.riskInstructions = risk.instructions;
+  if (risk.enabled && risk.promptFile) {
+    const prompt = await fetchRiskPrompt(
+      (path, ref) => provider.getFileContent(path, ref),
+      metadata.targetBranch,
+      risk.promptFile,
+    );
+    if (prompt) config.riskPrompt = prompt;
+  }
   log.info(
     { source: repoConfig?.risk ? "repo config" : "env", enabled: risk.enabled },
     "resolved risk policy",

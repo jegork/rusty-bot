@@ -504,10 +504,22 @@ Check in `.rusty-bot.json` to carry repository policy with the code. Like the co
     "enabled": true,
     "labelPrefix": "risk:",
     "requireLabel": true,
-    "reasons": ["migration", "authz", "money-math", "external-contract", "resource", "prompt", "infra", "deps", "ui-only"],
-    "instructions": "We run one production organisation, so scope is measured in clients and users, not tenants. Anything that reads an unbounded number of rows into memory affects everyone. Figures shown in an audit conclusion are silent when wrong."
+    "reasons": ["migration", "authz", "financial-figures", "external-contract", "resource", "prompt", "infra", "deps", "ui-only"],
+    "promptFile": ".rusty-bot/risk.md"
   }
 }
+```
+
+The rubric itself lives in the repo. `promptFile` names a markdown file, read from the same target branch, whose text replaces the bot's default explanation of the three questions. The bot always appends the fixed answer contract (`one_user` / `one_feature` / `everyone`, `immediate` / `monitored` / `silent`, `redeploy` / `rerun` / `repair`) and derives the level in code, so the team owns what the questions mean while the spelling and scoring of the answers cannot drift from the schema. Example `.rusty-bot/risk.md`:
+
+```markdown
+Judge the PR as a whole by answering three questions about what happens if it is wrong.
+
+- Who is affected? We run one production organisation, so scope is measured in customers and users, not tenants. Anything that reads an unbounded number of rows into memory affects everyone.
+- How would we find out? Figures shown in a report are silent when wrong; a job that reports success while sending nothing is silent.
+- Does a redeploy undo it? Bulk data rewrites, column type changes and anything already exported to the warehouse are not undone by a redeploy.
+
+Intent does not lower risk: a refactor in a risky area is as risky as a feature there.
 ```
 
 | Key | Meaning | Default |
@@ -516,7 +528,7 @@ Check in `.rusty-bot.json` to carry repository policy with the code. Like the co
 | `risk.labelPrefix` | PR label prefix the author's level is read from | `risk:` |
 | `risk.requireLabel` | fail the run when the PR carries no (or more than one) risk label | `true` |
 | `risk.reasons` | fixed vocabulary for reason tags; free-form when omitted | unset |
-| `risk.instructions` | repository-specific rules appended to the risk prompt | unset |
+| `risk.promptFile` | repo-relative markdown rubric replacing the bot's default prose; the answer contract is always appended | bot default |
 
 
 ### Convention Files

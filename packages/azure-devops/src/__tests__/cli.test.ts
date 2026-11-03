@@ -373,14 +373,20 @@ describe("risk policy from .rusty-bot.json", () => {
     level: "medium" as const,
   };
 
-  function useConfiguredProvider(repoConfig: string | null, labels: string[]) {
+  function useConfiguredProvider(
+    repoConfig: string | null,
+    labels: string[],
+    files: Record<string, string> = {},
+  ) {
     const provider = useProvider(METADATA) as ReturnType<typeof useProvider> & {
       getLabels: ReturnType<typeof vi.fn>;
       postStandaloneComment: ReturnType<typeof vi.fn>;
     };
     provider.getFileContent = vi
       .fn()
-      .mockImplementation(async (path: string) => (path === ".rusty-bot.json" ? repoConfig : null));
+      .mockImplementation(async (path: string) =>
+        path === ".rusty-bot.json" ? repoConfig : (files[path] ?? null),
+      );
     provider.getLabels = vi.fn().mockResolvedValue(labels);
     provider.postStandaloneComment = vi.fn().mockResolvedValue(undefined);
     vi.mocked(AzureDevOpsProvider).mockImplementation(function (this: AzureDevOpsProvider) {
@@ -429,16 +435,21 @@ describe("risk policy from .rusty-bot.json", () => {
   it("turns the policy on from the repo file when the env vars are unset", async () => {
     const provider = useConfiguredProvider(
       JSON.stringify({
-        risk: { reasons: ["ui-only"], instructions: "one prod org" },
+        risk: { reasons: ["ui-only"], promptFile: ".rusty-bot/risk.md" },
       }),
       ["risk:medium"],
+      { ".rusty-bot/risk.md": "# our rubric" },
     );
     await main();
     const reviewConfig = vi.mocked(runMultiCallReview).mock.calls[0][1];
     expect(reviewConfig.assessRisk).toBe(true);
     expect(reviewConfig.riskReasons).toEqual(["ui-only"]);
-    expect(reviewConfig.riskInstructions).toBe("one prod org");
+    expect(reviewConfig.riskPrompt).toBe("# our rubric");
     expect(provider.getFileContent).toHaveBeenCalledWith(".rusty-bot.json", METADATA.targetBranch);
+    expect(provider.getFileContent).toHaveBeenCalledWith(
+      ".rusty-bot/risk.md",
+      METADATA.targetBranch,
+    );
     expect(provider.getLabels).toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
   });
@@ -479,6 +490,21 @@ describe("risk policy from .rusty-bot.json", () => {
     await main();
     expect(vi.mocked(runMultiCallReview).mock.calls[0][1].assessRisk).toBe(true);
     expect(provider.getLabels).toHaveBeenCalled();
+  });
+
+  it("fails the run when the configured rubric file is missing on the target branch", async () => {
+    useConfiguredProvider(JSON.stringify({ risk: { promptFile: "missing.md" } }), ["risk:low"]);
+    await expect(main()).rejects.toThrow(/promptFile "missing.md" not found/);
+    expect(runMultiCallReview).not.toHaveBeenCalled();
+  });
+
+  it("does not fetch the rubric when the policy is off", async () => {
+    const provider = useConfiguredProvider(
+      JSON.stringify({ risk: { enabled: false, promptFile: "missing.md" } }),
+      [],
+    );
+    await main();
+    expect(provider.getFileContent).not.toHaveBeenCalledWith("missing.md", METADATA.targetBranch);
   });
 
   it("fails the run on a malformed repo file instead of reviewing without the policy", async () => {

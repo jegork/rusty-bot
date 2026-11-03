@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { fetchRepoConfig, parseRepoConfig, REPO_CONFIG_FILENAME } from "../repo-config.js";
+import {
+  fetchRepoConfig,
+  fetchRiskPrompt,
+  parseRepoConfig,
+  REPO_CONFIG_FILENAME,
+} from "../repo-config.js";
 
 describe("parseRepoConfig", () => {
   it("fills the risk defaults for a minimal section", () => {
@@ -8,18 +13,23 @@ describe("parseRepoConfig", () => {
     });
   });
 
-  it("keeps the vocabulary and instructions when given", () => {
+  it("keeps the vocabulary and the prompt file when given", () => {
     const config = parseRepoConfig(
       JSON.stringify({
-        risk: { requireLabel: false, reasons: ["authz"], instructions: "one prod org" },
+        risk: { requireLabel: false, reasons: ["authz"], promptFile: ".rusty-bot/risk.md" },
       }),
     );
     expect(config.risk).toMatchObject({
       enabled: true,
       requireLabel: false,
       reasons: ["authz"],
-      instructions: "one prod org",
+      promptFile: ".rusty-bot/risk.md",
     });
+  });
+
+  it("no longer accepts inline instructions", () => {
+    expect(() => parseRepoConfig('{"risk": {"instructions": "x"}}')).toThrow(/invalid repo config/);
+    expect(() => parseRepoConfig('{"risk": {"promptFile": ""}}')).toThrow(/promptFile/);
   });
 
   it("accepts an empty object as no policy at all", () => {
@@ -68,5 +78,36 @@ describe("fetchRepoConfig", () => {
     await expect(fetchRepoConfig(async () => '{"risk": 1}', "main")).rejects.toThrow(
       /invalid repo config/,
     );
+  });
+});
+
+describe("fetchRiskPrompt", () => {
+  it("reads the rubric from the given ref", async () => {
+    const getFileContent = vi.fn().mockResolvedValue("# our rubric");
+    await expect(fetchRiskPrompt(getFileContent, "main", ".rusty-bot/risk.md")).resolves.toBe(
+      "# our rubric",
+    );
+    expect(getFileContent).toHaveBeenCalledWith(".rusty-bot/risk.md", "main");
+  });
+
+  it("throws when the configured file is missing or empty", async () => {
+    await expect(fetchRiskPrompt(async () => null, "main", "risk.md")).rejects.toThrow(
+      'risk.promptFile "risk.md" not found on main',
+    );
+    await expect(fetchRiskPrompt(async () => "  \n", "main", "risk.md")).rejects.toThrow(
+      /not found/,
+    );
+  });
+
+  it("falls back to the default on a transport error", async () => {
+    await expect(
+      fetchRiskPrompt(
+        async () => {
+          throw new Error("503");
+        },
+        "main",
+        "risk.md",
+      ),
+    ).resolves.toBeNull();
   });
 });

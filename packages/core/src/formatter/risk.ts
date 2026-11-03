@@ -5,7 +5,7 @@ const LEVEL_LABEL: Record<RiskLevel, string> = { low: "Low", medium: "Medium", h
 
 const SCOPE_TEXT: Record<RiskAssessment["scope"], string> = {
   one_user: "one user or one screen",
-  one_feature: "users of one feature, client or dossier",
+  one_feature: "users of one feature or one customer",
   everyone: "every user, all data or the whole service",
 };
 const DETECTABILITY_TEXT: Record<RiskAssessment["detectability"], string> = {

@@ -6,7 +6,7 @@ const assessment: RiskAssessment = {
   scope: "one_feature",
   detectability: "silent",
   reversibility: "redeploy",
-  reasons: ["money-math"],
+  reasons: ["financial-figures"],
   justification: "A missing amount is now read as zero, so a validity check passes.",
   level: "high",
 };
@@ -17,7 +17,7 @@ describe("formatRiskDisagreementComment", () => {
     expect(text).toContain("`risk:low`");
     expect(text).toContain("rates it **High**");
     expect(text).toContain("| How would we find out? | nobody notices |");
-    expect(text).toContain("**Reasons:** `money-math`");
+    expect(text).toContain("**Reasons:** `financial-figures`");
     expect(text).toContain("change the label to `risk:high`");
     expect(text).toContain("resolve this thread");
   });

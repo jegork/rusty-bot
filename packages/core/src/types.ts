@@ -137,8 +137,8 @@ export interface ReviewConfig {
   assessRisk?: boolean;
   /** fixed vocabulary for risk reason tags; free-form when unset */
   riskReasons?: string[];
-  /** repository-specific risk rules appended to the risk assessment prompt */
-  riskInstructions?: string;
+  /** repository-owned risk rubric that replaces the bot's default prose; the answer contract is always appended */
+  riskPrompt?: string;
 }
 
 export interface PRMetadata {

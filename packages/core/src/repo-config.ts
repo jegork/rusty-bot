@@ -16,8 +16,8 @@ const RiskPolicySchema = z.strictObject({
   requireLabel: z.boolean().default(true),
   /** the only reason tags the assessment may use, when the team wants a fixed vocabulary */
   reasons: z.array(z.string().min(1)).optional(),
-  /** repository-specific rules appended to the risk assessment prompt */
-  instructions: z.string().optional(),
+  /** repo-relative path of a markdown rubric that replaces the bot's default risk prose */
+  promptFile: z.string().min(1).optional(),
 });
 
 export const RepoConfigSchema = z.strictObject({
@@ -42,6 +42,31 @@ export function parseRepoConfig(raw: string, source = REPO_CONFIG_FILENAME): Rep
     throw new Error(`${source}: invalid repo config:\n${issues}`);
   }
   return result.data;
+}
+
+/**
+ * Fetch the rubric named by `risk.promptFile` from the same ref as the config.
+ * A file that is configured but absent throws, since reviewing with the default
+ * prose would silently change the rubric the team signed off on; a transport
+ * error falls back to the default with a warning, like the config itself.
+ */
+export async function fetchRiskPrompt(
+  getFileContent: FileContentFetcher,
+  ref: string,
+  path: string,
+): Promise<string | null> {
+  let content: string | null;
+  try {
+    content = await getFileContent(path, ref);
+  } catch (err) {
+    log.warn({ ref, path, err }, "failed to fetch risk prompt file, using the default rubric");
+    return null;
+  }
+  if (content == null || content.trim() === "") {
+    throw new Error(`${REPO_CONFIG_FILENAME}: risk.promptFile "${path}" not found on ${ref}`);
+  }
+  log.info({ ref, path, chars: content.length }, "loaded risk prompt file");
+  return content;
 }
 
 /**

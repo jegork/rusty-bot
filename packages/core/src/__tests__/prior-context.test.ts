@@ -289,7 +289,7 @@ describe("risk assessment carry-forward", () => {
     scope: "one_feature" as const,
     detectability: "silent" as const,
     reversibility: "rerun" as const,
-    reasons: ["money-math"],
+    reasons: ["financial-figures"],
     justification: "a missing amount reads as zero",
     level: "high" as const,
   };

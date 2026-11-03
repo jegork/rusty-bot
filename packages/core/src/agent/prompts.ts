@@ -72,16 +72,15 @@ const SCOPE_CREEP_OUTPUT_REQUIREMENT =
 const RISK_ASSESSMENT_OUTPUT_REQUIREMENT =
   "- A riskAssessment object answering the three risk questions for the PR as a whole (see the risk assessment rules below).";
 
+// the repo owns the prose (what the three questions mean for its product); the
+// bot owns the contract (how the answers are spelled and reported), so a
+// rewritten rubric can never desync from the schema that validates it
 function buildRiskInstructions(config: ReviewConfig): string {
-  const parts = [loadTemplate("risk-assessment.txt")];
+  const prose = config.riskPrompt?.trim() || loadTemplate("risk-assessment.txt");
+  const parts = [prose, loadTemplate("risk-contract.txt")];
   if (config.riskReasons && config.riskReasons.length > 0) {
     parts.push(
       `Use only these reason tags: ${config.riskReasons.map((r) => `"${r}"`).join(", ")}.`,
-    );
-  }
-  if (config.riskInstructions?.trim()) {
-    parts.push(
-      `Repository risk rules, which take precedence over the general rules above:\n${config.riskInstructions.trim()}`,
     );
   }
   return `\n${parts.join("\n\n")}`;

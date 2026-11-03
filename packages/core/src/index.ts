@@ -60,6 +60,7 @@ export * from "./title/index.js";
 export { fetchConventionFile } from "./convention-file.js";
 export {
   fetchRepoConfig,
+  fetchRiskPrompt,
   parseRepoConfig,
   RepoConfigSchema,
   REPO_CONFIG_FILENAME,

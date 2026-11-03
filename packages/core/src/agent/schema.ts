@@ -135,7 +135,7 @@ export const RiskReversibilitySchema = z.enum(["redeploy", "rerun", "repair"]);
 
 export const RiskAssessmentOutputSchema = z.object({
   scope: RiskScopeSchema.describe(
-    "who is affected if the change is wrong: one_user (one user or one screen), one_feature (users of one feature, client or dossier), everyone (every user, all stored data, or the whole service)",
+    "who is affected if the change is wrong: one_user (one user or one screen), one_feature (users of one feature or one customer), everyone (every user, all stored data, or the whole service)",
   ),
   detectability: RiskDetectabilitySchema.describe(
     "how a defect would be found: immediate (the user sees it right away), monitored (logs, metrics or a failing job), silent (nobody notices: wrong numbers, a silent no-op, silent data exposure)",
@@ -146,7 +146,7 @@ export const RiskAssessmentOutputSchema = z.object({
   reasons: z
     .array(z.string())
     .describe(
-      "short tags naming what drives the risk, e.g. migration, authz, external-contract, money-math, resource, prompt, infra, deps, ui-only; empty only when nothing drives it",
+      "short tags naming what drives the risk, e.g. migration, authz, external-contract, resource, infra, deps, ui-only; empty only when nothing drives it",
     ),
   justification: z
     .string()

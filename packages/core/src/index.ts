@@ -58,5 +58,13 @@ export * from "./opengrep/index.js";
 export * from "./description/index.js";
 export * from "./title/index.js";
 export { fetchConventionFile } from "./convention-file.js";
+export {
+  fetchRepoConfig,
+  parseRepoConfig,
+  RepoConfigSchema,
+  REPO_CONFIG_FILENAME,
+  type RepoConfig,
+  type RiskPolicy,
+} from "./repo-config.js";
 export * from "./analysis/raw-findings.js";
 export * from "./repo/index.js";

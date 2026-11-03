@@ -18,7 +18,7 @@ Built on the [AI SDK](https://ai-sdk.dev) (TypeScript).
 - **Multi-provider LLM** — OpenAI, Anthropic, Google, OpenRouter, Requesty, Azure OpenAI / AI Foundry, Ollama, or any OpenAI-compatible endpoint
 - **PR description generation** — optionally generate a structured PR description from the diff when the description is empty or a placeholder (off by default)
 - **Scope creep detection** — optionally list changes in the diff that fall outside the PR's stated intent (title, description, linked tickets) in a dedicated summary section (off by default; enable with `RUSTY_FLAG_SCOPE_CREEP=true`)
-- **Risk assessment** — optionally rate each PR low, medium or high from three answers (who is affected if it is wrong, how it would be noticed, whether a redeploy undoes it). The level is derived in code from the answers, shown in the summary, and compared with the author's `risk:` label on Azure DevOps: a higher bot rating opens an active thread with the reasoning; a missing label fails the task (off by default; enable with `RUSTY_RISK_ASSESSMENT=true`)
+- **Risk assessment** — optionally rate each PR low, medium or high from three answers (who is affected if it is wrong, how it would be noticed, whether a redeploy undoes it). The level is derived in code from the answers, shown in the summary, and compared with the author's `risk:` label on Azure DevOps: a higher bot rating opens an active thread with the reasoning; a missing label fails the task (off by default; enable per repo in `.rusty-bot.json` or with `RUSTY_RISK_ASSESSMENT=true`)
 - **Incremental review** — on subsequent pushes the bot reviews only the diff since the previously-reviewed state (commit on GitHub/GitLab, PR iteration on Azure DevOps) instead of the entire PR, cutting tokens on multi-commit PRs. The previous summary, recommendation, and surfaced findings are carried forward so the agent keeps PR-wide context without re-reading the full diff (on by default; opt out with `RUSTY_INCREMENTAL_REVIEW=false`)
 - **GitHub + GitLab + Azure DevOps + local CLI** — a drop-in GitHub Action, pipeline task for Azure DevOps, GitLab CI job, or a `rusty-bot` CLI that runs reviews against any local git repo
 
@@ -271,7 +271,7 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 | `RUSTY_GENERATE_DESCRIPTION` | generate PR description when empty/placeholder | `false` |
 | `RUSTY_RENAME_TITLE_TO_CONVENTIONAL` | rewrite non-conventional PR titles into Conventional Commits format | `false` |
 | `RUSTY_FLAG_SCOPE_CREEP` | list changes that fall outside the PR's stated intent in a "Scope Creep" section of the summary comment | `false` |
-| `RUSTY_RISK_ASSESSMENT` | ask the review to rate the PR's risk (who is affected, how a defect would be noticed, whether a redeploy undoes it) and compare it with the author's `risk:` label; Azure DevOps only | `false` |
+| `RUSTY_RISK_ASSESSMENT` | ask the review to rate the PR's risk (who is affected, how a defect would be noticed, whether a redeploy undoes it) and compare it with the author's `risk:` label; Azure DevOps only. Fallback for repos without a `risk` section in `.rusty-bot.json` | `false` |
 | `RUSTY_RISK_LABEL_PREFIX` | PR label prefix the author's level is read from (`risk:low`, `risk:medium`, `risk:high`) | `risk:` |
 | `RUSTY_RISK_REQUIRE_LABEL` | with risk assessment on, exit 1 when the PR carries no (or more than one) risk label | `true` |
 | `RUSTY_LLM_MAX_RETRIES` | application-level retries on transient LLM errors (max 2) | `2` |
@@ -492,7 +492,32 @@ Costs: one extra LLM call per review pass (small on a cheap model) and ~3–8s o
 
 ### Per-Repository Configuration
 
-Configuration is env-only: every run reads the `RUSTY_*` variables from its CI job (see [Environment Variables](#environment-variables)), so per-repo settings live in each repo's pipeline definition.
+Review settings are read from the `RUSTY_*` variables of the CI job (see [Environment Variables](#environment-variables)). Policies that belong to a repository rather than a pipeline live in a `.rusty-bot.json` at the repo root, described below.
+
+### Repo config file
+
+Check in `.rusty-bot.json` to carry repository policy with the code. Like the convention file it is fetched from the **target branch**, so a pull request cannot change the policy that reviews it. Unknown keys are rejected and a malformed file fails the run, so a broken policy is never silently ignored. When the file is absent the bot falls back to the env vars.
+
+```json
+{
+  "risk": {
+    "enabled": true,
+    "labelPrefix": "risk:",
+    "requireLabel": true,
+    "reasons": ["migration", "authz", "money-math", "external-contract", "resource", "prompt", "infra", "deps", "ui-only"],
+    "instructions": "We run one production organisation, so scope is measured in clients and users, not tenants. Anything that reads an unbounded number of rows into memory affects everyone. Figures shown in an audit conclusion are silent when wrong."
+  }
+}
+```
+
+| Key | Meaning | Default |
+|-----|---------|---------|
+| `risk.enabled` | ask the review for a risk assessment and compare it with the author's label (Azure DevOps) | `true` |
+| `risk.labelPrefix` | PR label prefix the author's level is read from | `risk:` |
+| `risk.requireLabel` | fail the run when the PR carries no (or more than one) risk label | `true` |
+| `risk.reasons` | fixed vocabulary for reason tags; free-form when omitted | unset |
+| `risk.instructions` | repository-specific rules appended to the risk prompt | unset |
+
 
 ### Convention Files
 

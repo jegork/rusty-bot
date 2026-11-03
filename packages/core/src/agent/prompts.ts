@@ -72,6 +72,21 @@ const SCOPE_CREEP_OUTPUT_REQUIREMENT =
 const RISK_ASSESSMENT_OUTPUT_REQUIREMENT =
   "- A riskAssessment object answering the three risk questions for the PR as a whole (see the risk assessment rules below).";
 
+function buildRiskInstructions(config: ReviewConfig): string {
+  const parts = [loadTemplate("risk-assessment.txt")];
+  if (config.riskReasons && config.riskReasons.length > 0) {
+    parts.push(
+      `Use only these reason tags: ${config.riskReasons.map((r) => `"${r}"`).join(", ")}.`,
+    );
+  }
+  if (config.riskInstructions?.trim()) {
+    parts.push(
+      `Repository risk rules, which take precedence over the general rules above:\n${config.riskInstructions.trim()}`,
+    );
+  }
+  return `\n${parts.join("\n\n")}`;
+}
+
 export function buildSystemPrompt(
   config: ReviewConfig,
   tier: ReviewTier = "deep-review",
@@ -94,7 +109,7 @@ export function buildSystemPrompt(
     ...(assessRisk ? [RISK_ASSESSMENT_OUTPUT_REQUIREMENT] : []),
   ].join("\n");
   const scopeCreepInstructions = scopeCreep ? `\n${loadTemplate("scope-creep.txt")}` : "";
-  const riskAssessmentInstructions = assessRisk ? `\n${loadTemplate("risk-assessment.txt")}` : "";
+  const riskAssessmentInstructions = assessRisk ? buildRiskInstructions(config) : "";
   const toolInstructions =
     codeGraphTools && tier === "deep-review"
       ? tierSections.tool_instructions + CODE_GRAPH_TOOL_INSTRUCTIONS

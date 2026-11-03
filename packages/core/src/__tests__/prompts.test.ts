@@ -115,3 +115,33 @@ describe("risk assessment in the system prompt", () => {
     expect(prompt).toContain("A riskAssessment object");
   });
 });
+
+describe("repository risk rules in the system prompt", () => {
+  it("adds the vocabulary and the repo rules only when risk assessment is on", () => {
+    const on = {
+      ...config,
+      assessRisk: true,
+      riskReasons: ["authz", "money-math"],
+      riskInstructions: "one prod org, scope counts clients",
+    };
+    const prompt = buildSystemPrompt(on, "deep-review");
+    expect(prompt).toContain('Use only these reason tags: "authz", "money-math".');
+    expect(prompt).toContain("Repository risk rules");
+    expect(prompt).toContain("one prod org, scope counts clients");
+    expect(prompt.indexOf("Risk assessment is enabled.")).toBeLessThan(
+      prompt.indexOf("Repository risk rules"),
+    );
+
+    const off = buildSystemPrompt({ ...on, assessRisk: false }, "deep-review");
+    expect(off).not.toContain("Use only these reason tags");
+    expect(off).not.toContain("one prod org");
+  });
+
+  it("leaves the vocabulary line out when no reasons are configured", () => {
+    const prompt = buildSystemPrompt(
+      { ...config, assessRisk: true, riskReasons: [] },
+      "deep-review",
+    );
+    expect(prompt).not.toContain("Use only these reason tags");
+  });
+});

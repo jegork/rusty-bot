@@ -5,6 +5,7 @@ import type {
   ReviewConfig,
   RiskLabelResult,
   RiskLevel,
+  RiskPolicy,
   TicketRef,
 } from "@rusty-bot/core";
 import { ReviewStyleSchema } from "@rusty-bot/core";
@@ -40,6 +41,7 @@ import {
   mergeRiskAssessments,
   formatRiskDisagreementComment,
   formatMissingRiskLabelComment,
+  fetchRepoConfig,
 } from "@rusty-bot/core";
 import { AzureDevOpsProvider } from "./provider.js";
 
@@ -47,20 +49,12 @@ const log = logger.child({ package: "azure-devops" });
 
 const MAX_TOKENS = 120_000;
 
-export interface RiskPolicy {
-  /** ask the review for a risk assessment and compare it with the author's label */
-  enabled: boolean;
-  /** label prefix the author's level is read from, e.g. `risk:` for `risk:high` */
-  labelPrefix: string;
-  /** fail the task when the PR carries no (or more than one) risk label */
-  requireLabel: boolean;
-}
-
 export function parseConfig(): {
   provider: AzureDevOpsProvider;
   config: ReviewConfig;
   failOnCritical: boolean;
   incrementalReview: boolean;
+  /** risk policy from the RUSTY_RISK_* env vars; the repo's `.rusty-bot.json` overrides it when present */
   risk: RiskPolicy;
   env: { orgUrl: string; project: string; accessToken: string };
 } {
@@ -111,7 +105,6 @@ export function parseConfig(): {
       focusAreas,
       ignorePatterns,
       flagScopeCreep,
-      assessRisk: risk.enabled,
     },
     failOnCritical,
     incrementalReview,
@@ -152,9 +145,24 @@ async function enforceRiskLabel(
 export async function main(): Promise<void> {
   configureGlobalHttp();
 
-  const { provider, config, failOnCritical, incrementalReview, risk, env } = parseConfig();
+  const { provider, config, failOnCritical, incrementalReview, risk: envRisk, env } = parseConfig();
 
   const metadata = await provider.getPRMetadata();
+
+  // the policy file is read from the target branch, so a PR cannot relax the gate that reviews it
+  const repoConfig = await fetchRepoConfig(
+    (path, ref) => provider.getFileContent(path, ref),
+    metadata.targetBranch,
+  );
+  const risk: RiskPolicy = repoConfig?.risk ?? envRisk;
+  config.assessRisk = risk.enabled;
+  config.riskReasons = risk.reasons;
+  config.riskInstructions = risk.instructions;
+  log.info(
+    { source: repoConfig?.risk ? "repo config" : "env", enabled: risk.enabled },
+    "resolved risk policy",
+  );
+
   const authorRisk = await readAuthorRiskLabel(provider, risk);
   log.info(
     { prId: metadata.id, source: metadata.sourceBranch, target: metadata.targetBranch },

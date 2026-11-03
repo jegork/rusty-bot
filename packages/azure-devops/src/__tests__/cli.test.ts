@@ -362,3 +362,128 @@ describe("risk label policy", () => {
     expect(exitSpy).not.toHaveBeenCalled();
   });
 });
+
+describe("risk policy from .rusty-bot.json", () => {
+  const assessment = {
+    scope: "one_feature" as const,
+    detectability: "monitored" as const,
+    reversibility: "redeploy" as const,
+    reasons: ["ui-only"],
+    justification: "a visible change in one screen",
+    level: "medium" as const,
+  };
+
+  function useConfiguredProvider(repoConfig: string | null, labels: string[]) {
+    const provider = useProvider(METADATA) as ReturnType<typeof useProvider> & {
+      getLabels: ReturnType<typeof vi.fn>;
+      postStandaloneComment: ReturnType<typeof vi.fn>;
+    };
+    provider.getFileContent = vi
+      .fn()
+      .mockImplementation(async (path: string) => (path === ".rusty-bot.json" ? repoConfig : null));
+    provider.getLabels = vi.fn().mockResolvedValue(labels);
+    provider.postStandaloneComment = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(AzureDevOpsProvider).mockImplementation(function (this: AzureDevOpsProvider) {
+      return Object.assign(this, provider) as unknown as AzureDevOpsProvider;
+    });
+    return provider;
+  }
+
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.stubEnv("SYSTEM_PULLREQUEST_PULLREQUESTID", "7");
+    vi.stubEnv("SYSTEM_TEAMFOUNDATIONCOLLECTIONURI", "https://dev.azure.com/acme/");
+    vi.stubEnv("SYSTEM_TEAMPROJECT", "proj");
+    vi.stubEnv("BUILD_REPOSITORY_NAME", "repo");
+    vi.stubEnv("SYSTEM_ACCESSTOKEN", "ado-token");
+    vi.stubEnv("BUILD_SOURCESDIRECTORY", undefined);
+    vi.stubEnv("RUSTY_INCREMENTAL_REVIEW", "false");
+    vi.stubEnv("RUSTY_FAIL_ON_CRITICAL", "false");
+    vi.stubEnv("RUSTY_RISK_ASSESSMENT", undefined);
+    vi.mocked(isCascadeEnabled).mockReturnValue(false);
+    vi.mocked(runOpenGrep).mockResolvedValue({ available: false, findings: [], rawCount: 0 });
+    vi.mocked(runMultiCallReview).mockResolvedValue({
+      summary: "ok",
+      findings: [],
+      observations: [],
+      ticketCompliance: [],
+      missingTests: [],
+      filesReviewed: [PATCH.path],
+      recommendation: "looks_good",
+      modelUsed: "test-model",
+      tokenCount: 1,
+      riskAssessment: assessment,
+    });
+    exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit");
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+    exitSpy.mockRestore();
+  });
+
+  it("turns the policy on from the repo file when the env vars are unset", async () => {
+    const provider = useConfiguredProvider(
+      JSON.stringify({
+        risk: { reasons: ["ui-only"], instructions: "one prod org" },
+      }),
+      ["risk:medium"],
+    );
+    await main();
+    const reviewConfig = vi.mocked(runMultiCallReview).mock.calls[0][1];
+    expect(reviewConfig.assessRisk).toBe(true);
+    expect(reviewConfig.riskReasons).toEqual(["ui-only"]);
+    expect(reviewConfig.riskInstructions).toBe("one prod org");
+    expect(provider.getFileContent).toHaveBeenCalledWith(".rusty-bot.json", METADATA.targetBranch);
+    expect(provider.getLabels).toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("lets the repo file override the env vars in both directions", async () => {
+    vi.stubEnv("RUSTY_RISK_ASSESSMENT", "true");
+    const off = useConfiguredProvider(JSON.stringify({ risk: { enabled: false } }), []);
+    await main();
+    expect(vi.mocked(runMultiCallReview).mock.calls[0][1].assessRisk).toBe(false);
+    expect(off.getLabels).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    vi.stubEnv("RUSTY_RISK_ASSESSMENT", "false");
+    const lenient = useConfiguredProvider(
+      JSON.stringify({ risk: { requireLabel: false, labelPrefix: "Risk/" } }),
+      [],
+    );
+    await main();
+    expect(vi.mocked(runMultiCallReview).mock.calls[0][1].assessRisk).toBe(true);
+    expect(lenient.postStandaloneComment).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("reads the author's label with the prefix from the repo file", async () => {
+    const provider = useConfiguredProvider(JSON.stringify({ risk: { labelPrefix: "Risk/" } }), [
+      "Risk/low",
+    ]);
+    await main();
+    expect(provider.postSummaryComment.mock.calls[0][0]).toContain(
+      "## Risk: Medium (author says Low)",
+    );
+    expect(provider.postStandaloneComment.mock.calls[0][0]).toContain("`Risk/low`");
+  });
+
+  it("falls back to the env vars when there is no repo file", async () => {
+    vi.stubEnv("RUSTY_RISK_ASSESSMENT", "true");
+    const provider = useConfiguredProvider(null, ["risk:medium"]);
+    await main();
+    expect(vi.mocked(runMultiCallReview).mock.calls[0][1].assessRisk).toBe(true);
+    expect(provider.getLabels).toHaveBeenCalled();
+  });
+
+  it("fails the run on a malformed repo file instead of reviewing without the policy", async () => {
+    useConfiguredProvider('{"risk": {"require_label": false}}', ["risk:medium"]);
+    await expect(main()).rejects.toThrow(/invalid repo config/);
+    expect(runMultiCallReview).not.toHaveBeenCalled();
+  });
+});

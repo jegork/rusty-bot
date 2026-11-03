@@ -135,6 +135,10 @@ export interface ReviewConfig {
   flagScopeCreep?: boolean;
   /** ask the deep-review tier to assess the PR's risk on scope, detectability and reversibility */
   assessRisk?: boolean;
+  /** fixed vocabulary for risk reason tags; free-form when unset */
+  riskReasons?: string[];
+  /** repository-specific risk rules appended to the risk assessment prompt */
+  riskInstructions?: string;
 }
 
 export interface PRMetadata {

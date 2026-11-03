@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.21.0](https://github.com/jegork/rusty-bot/compare/v1.20.0...v1.21.0) (2026-10-30)
+
+
+### Features
+
+* **core:** add experimental CodeGraph review tools behind RUSTY_CODEGRAPH ([#217](https://github.com/jegork/rusty-bot/issues/217)) ([78a81b3](https://github.com/jegork/rusty-bot/commit/78a81b34a656e4469cf578817a93c0a6145f0020))
+* **core:** raise the convention file limit to 15k tokens ([#214](https://github.com/jegork/rusty-bot/issues/214)) ([b2b30b9](https://github.com/jegork/rusty-bot/commit/b2b30b9e0fd7614e6224994ec93b83f328e02f1d))
+
 ## [1.20.0](https://github.com/jegork/rusty-bot/compare/v1.19.0...v1.20.0) (2026-10-29)
 
 

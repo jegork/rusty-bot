@@ -236,7 +236,7 @@ function buildStepLogger(
     if (typeof step !== "object" || step === null) return;
     const s = step as {
       finishReason?: unknown;
-      toolCalls?: { toolName?: unknown }[];
+      toolCalls?: ({ toolName?: unknown } | null | undefined)[];
       usage?: { totalTokens?: number; inputTokens?: number; outputTokens?: number };
       warnings?: unknown[];
     };
@@ -248,7 +248,7 @@ function buildStepLogger(
         stepNumber,
         finishReason: s.finishReason,
         toolCallCount: toolCalls.length,
-        toolNames: toolCalls.flatMap((c) => (typeof c.toolName === "string" ? [c.toolName] : [])),
+        toolNames: toolCalls.flatMap((c) => (typeof c?.toolName === "string" ? [c.toolName] : [])),
         totalTokens: s.usage?.totalTokens,
         inputTokens: s.usage?.inputTokens,
         outputTokens: s.usage?.outputTokens,

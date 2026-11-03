@@ -1112,6 +1112,15 @@ describe("runReview step log attempts", () => {
     expect(malformed.toolCallCount).toBe(3);
   });
 
+  it("does not throw on null tool call entries, and still counts them", async () => {
+    const [step] = await loggedStepsFor([
+      { finishReason: "tool-calls", toolCalls: [null, undefined, { toolName: "searchCode" }] },
+    ]);
+
+    expect(step.toolNames).toEqual(["searchCode"]);
+    expect(step.toolCallCount).toBe(3);
+  });
+
   it("restarts stepNumber at 0 and bumps attempt on a transient retry", async () => {
     const step = { finishReason: "tool-calls", toolCalls: [{}], usage: {}, warnings: [] };
     generateMock.mockImplementation(async (opts: Record<string, unknown>) => {

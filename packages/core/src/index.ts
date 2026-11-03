@@ -49,3 +49,12 @@ export * from "./title/index.js";
 export { fetchConventionFile } from "./convention-file.js";
 export * from "./analysis/raw-findings.js";
 export * from "./repo/index.js";
+export {
+  runPrReview,
+  runTriagedReview,
+  headShaIncremental,
+  type ReviewPlatform,
+  type IncrementalStrategy,
+  type IncrementalState,
+  type RunTriagedReviewParams,
+} from "./review-pipeline.js";

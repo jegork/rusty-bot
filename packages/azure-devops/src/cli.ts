@@ -1,38 +1,17 @@
 import type {
-  FilePatch,
   FocusArea,
-  PriorReviewContext,
+  IncrementalStrategy,
   ReviewConfig,
-  TicketRef,
+  ReviewPlatform,
+  TicketProvider,
 } from "@rusty-bot/core";
-import { ReviewStyleSchema } from "@rusty-bot/core";
 import {
-  filterFiles,
-  expandContext,
-  summarizeLanguages,
-  extractTicketRefs,
-  resolveTicketsWithStatus,
-  fetchConventionFile,
+  ReviewStyleSchema,
   AzureDevOpsTicketProvider,
-  runMultiCallReview,
-  runCascadeReview,
-  formatSummaryComment,
-  loadMcpServerConfigsFromEnv,
   logger,
   flushLogger,
-  isCascadeEnabled,
-  runTriage,
-  splitByClassification,
-  runOpenGrep,
-  extractChangedFilePaths,
-  generatePRDescription,
-  shouldGenerateDescription,
-  generateConventionalTitle,
-  isConventionalTitle,
-  filterAnchorableFindings,
-  buildPriorContextFromReview,
   configureGlobalHttp,
-  resolveRepoCheckout,
+  runPrReview,
 } from "@rusty-bot/core";
 import { AzureDevOpsProvider } from "./provider.js";
 
@@ -96,339 +75,80 @@ export function parseConfig(): {
   };
 }
 
-export async function main(): Promise<void> {
-  configureGlobalHttp();
-
-  const { provider, config, failOnCritical, incrementalReview, env } = parseConfig();
-
-  const metadata = await provider.getPRMetadata();
-  log.info(
-    { prId: metadata.id, source: metadata.sourceBranch, target: metadata.targetBranch },
-    "reviewing PR",
-  );
-
-  // the pipeline's shallow checkout is the merge commit; the PR head is fetched with System.AccessToken
-  const checkout = await resolveRepoCheckout({
-    repoPath: process.env.BUILD_SOURCESDIRECTORY,
-    headSha: metadata.headSha,
-    fetchAuthHeader: `bearer ${env.accessToken}`,
-  });
-  const fetchSourceFile = (path: string) =>
-    checkout ? checkout.readFile(path) : provider.getFileContent(path, metadata.sourceBranch);
-
-  const conventionFile = await fetchConventionFile(
-    (path, ref) => provider.getFileContent(path, ref),
-    metadata.targetBranch,
-  );
-  if (conventionFile) {
-    config.conventionFile = conventionFile;
-  }
-
-  // read incremental marker + prior context before deleting old bot comments —
-  // otherwise we lose the iteration id and the carry-forward state
-  let lastReviewedIteration: string | null = null;
-  let latestIteration: string | null = null;
-  let priorContext: PriorReviewContext | null = null;
-  if (incrementalReview) {
-    try {
-      [lastReviewedIteration, latestIteration] = await Promise.all([
-        provider.getLastReviewedIteration(),
-        provider.getLatestIterationId(),
-      ]);
-    } catch (err) {
-      log.warn({ err }, "failed to read iteration state, falling back to full review");
-    }
-    if (lastReviewedIteration) {
-      try {
-        priorContext = await provider.getPriorReviewContext();
-      } catch (err) {
-        log.warn({ err }, "failed to read prior review context; continuing without it");
-      }
-    }
-  } else {
-    try {
-      latestIteration = await provider.getLatestIterationId();
-    } catch (err) {
-      log.warn({ err }, "failed to read latest iteration id, marker will not be embedded");
-    }
-  }
-
-  if (lastReviewedIteration && latestIteration && lastReviewedIteration === latestIteration) {
-    log.info(
-      { iteration: latestIteration },
-      "latest iteration matches last reviewed iteration, skipping review",
-    );
-    return;
-  }
-
-  await provider.deleteExistingBotComments();
-
-  let rawPatches: FilePatch[] | null = null;
-  let incrementalUsed = false;
-  if (lastReviewedIteration) {
-    const incremental = await provider.getDiffSinceIteration(lastReviewedIteration);
-    if (incremental) {
-      rawPatches = incremental;
-      incrementalUsed = true;
-      log.info(
-        {
-          lastReviewedIteration,
-          latestIteration,
-          files: incremental.length,
-        },
-        "running incremental review",
-      );
-    }
-  }
-
-  rawPatches ??= await provider.getDiff();
-
-  const reviewable = filterFiles(rawPatches, config.ignorePatterns);
-  const skippedCount = rawPatches.length - reviewable.length;
-  log.info(
-    {
-      total: rawPatches.length,
-      reviewed: reviewable.length,
-      skipped: skippedCount,
-      mode: incrementalUsed ? "incremental" : "full",
-    },
-    "files changed",
-  );
-
-  if (incrementalUsed && reviewable.length === 0 && latestIteration) {
-    log.info(
-      { lastReviewedIteration, latestIteration },
-      "no reviewable changes in incremental delta, skipping LLM review",
-    );
-    await provider.postSummaryComment("No reviewable changes since the last review.", {
-      lastReviewedIteration: latestIteration,
-    });
-    return;
-  }
-
-  if (process.env.RUSTY_RENAME_TITLE_TO_CONVENTIONAL === "true") {
-    try {
-      if (!isConventionalTitle(metadata.title)) {
-        const titleResult = await generateConventionalTitle(reviewable, metadata);
-        await provider.updatePRTitle(titleResult.title);
-        log.info(
-          {
-            originalTitle: metadata.title,
-            newTitle: titleResult.title,
-            model: titleResult.modelUsed,
-            tokens: titleResult.tokenCount,
-          },
-          "renamed PR title to conventional commit format",
-        );
-        metadata.title = titleResult.title;
-      }
-    } catch (err) {
-      log.warn({ err }, "failed to rename PR title, continuing with review");
-    }
-  }
-
-  if (process.env.RUSTY_GENERATE_DESCRIPTION === "true") {
-    try {
-      if (shouldGenerateDescription(metadata.description)) {
-        const descResult = await generatePRDescription(reviewable, metadata, metadata.description, {
-          incremental: incrementalUsed,
-        });
-        await provider.updatePRDescription(descResult.markdown);
-        metadata.description = descResult.markdown;
-        log.info(
-          { model: descResult.modelUsed, tokens: descResult.tokenCount },
-          "generated PR description",
-        );
-      }
-    } catch (err) {
-      log.warn({ err }, "failed to generate PR description, continuing with review");
-    }
-  }
-
-  const ticketRefs = extractTicketRefs(metadata.description, metadata.sourceBranch);
-
-  let linkedRefs: TicketRef[] = [];
-  try {
-    const linkedIds = await provider.getLinkedWorkItemIds();
-    const existingIds = new Set(
-      ticketRefs.filter((r) => r.source === "azure-devops").map((r) => r.id),
-    );
-    linkedRefs = linkedIds
-      .filter((id) => !existingIds.has(id))
-      .map((id) => ({ id, source: "azure-devops" }));
-  } catch (err) {
-    log.warn({ err }, "failed to fetch linked work items from ADO, continuing with extracted refs");
-  }
-  const allRefs = [...ticketRefs, ...linkedRefs];
-
-  const ticketProviders = new Map<string, AzureDevOpsTicketProvider>();
-  if (allRefs.some((r) => r.source === "azure-devops")) {
-    ticketProviders.set(
-      "azure-devops",
-      new AzureDevOpsTicketProvider({
-        orgUrl: env.orgUrl,
-        project: env.project,
-        pat: env.accessToken,
-      }),
-    );
-  }
-
-  const { tickets, status: ticketResolution } = await resolveTicketsWithStatus(
-    allRefs,
-    ticketProviders,
-  );
-
-  const languageSummary = summarizeLanguages(reviewable);
-  const mcpServers = await loadMcpServerConfigsFromEnv();
-
-  const openGrepResult = await runOpenGrep(extractChangedFilePaths(reviewable), {
-    config: process.env.RUSTY_OPENGREP_RULES ?? "auto",
-  });
-  const openGrepFindings = openGrepResult.findings.length > 0 ? openGrepResult.findings : undefined;
-  if (openGrepResult.error) {
-    log.warn(
-      { error: openGrepResult.error },
-      "opengrep pre-scan failed, review will proceed without its findings",
-    );
-  } else if (openGrepResult.available) {
-    log.info({ findingCount: openGrepResult.findings.length }, "opengrep pre-scan complete");
-  }
-
-  let review;
-
-  if (isCascadeEnabled()) {
-    log.info({ fileCount: reviewable.length }, "cascade enabled, running triage");
-
-    let triageResult;
-    try {
-      triageResult = await runTriage(reviewable, openGrepFindings);
-    } catch (err) {
-      log.warn({ err }, "triage failed, falling back to full review");
-    }
-
-    if (triageResult) {
-      const { skip, skim, deepReview } = splitByClassification(reviewable, triageResult.files);
-      log.info(
-        { skipped: skip.length, skimmed: skim.length, deepReview: deepReview.length },
-        "triage classification",
-      );
-
-      const expandedDeep = await expandContext(deepReview, fetchSourceFile);
-
-      review = await runCascadeReview(
-        skim,
-        expandedDeep,
-        config,
-        metadata,
-        tickets.length > 0 ? tickets : undefined,
-        {
-          provider,
-          sourceRef: metadata.sourceBranch,
-          checkout: checkout ?? undefined,
-          languageSummary,
-          mcpServers,
-          maxTokens: MAX_TOKENS,
-          openGrepFindings,
-          priorContext: incrementalUsed && priorContext ? priorContext : undefined,
-        },
-      );
-
-      review.triageStats = {
-        filesSkipped: skip.length,
-        filesSkimmed: skim.length,
-        filesDeepReviewed: deepReview.length,
-        triageModelUsed: triageResult.modelUsed,
-        triageTokenCount: triageResult.tokenCount,
-      };
-    }
-  }
-
-  if (!review) {
-    const expanded = await expandContext(reviewable, fetchSourceFile);
-
-    review = await runMultiCallReview(
-      expanded,
-      config,
-      metadata,
-      tickets.length > 0 ? tickets : undefined,
-      {
-        provider,
-        sourceRef: metadata.sourceBranch,
-        checkout: checkout ?? undefined,
-        languageSummary,
-        mcpServers,
-        maxTokens: MAX_TOKENS,
-        openGrepFindings,
-        priorContext: incrementalUsed && priorContext ? priorContext : undefined,
-      },
-    );
-  }
-
-  review.openGrepStats = {
-    available: openGrepResult.available,
-    findingCount: openGrepResult.rawCount,
-    ...(openGrepResult.error ? { error: openGrepResult.error } : {}),
-  };
-
-  const criticalCount = review.findings.filter((f) => f.severity === "critical").length;
-  const warningCount = review.findings.filter((f) => f.severity === "warning").length;
-  log.info(
-    {
-      findings: review.findings.length,
-      critical: criticalCount,
-      warnings: warningCount,
-      recommendation: review.recommendation,
-    },
-    "review complete",
-  );
-
-  const summaryMarkdown = formatSummaryComment(review, { ticketResolution });
-  await provider.postSummaryComment(
-    summaryMarkdown,
-    latestIteration
-      ? {
-          lastReviewedIteration: latestIteration,
-          priorContext: buildPriorContextFromReview(review),
+export function iterationIncremental(provider: AzureDevOpsProvider): IncrementalStrategy {
+  return {
+    async readState(_metadata, enabled) {
+      if (!enabled) {
+        try {
+          return { lastReviewed: null, current: await provider.getLatestIterationId() };
+        } catch (err) {
+          log.warn({ err }, "failed to read latest iteration id, marker will not be embedded");
+          return { lastReviewed: null, current: null };
         }
-      : undefined,
-  );
+      }
+      try {
+        const [lastReviewed, current] = await Promise.all([
+          provider.getLastReviewedIteration(),
+          provider.getLatestIterationId(),
+        ]);
+        return { lastReviewed, current };
+      } catch (err) {
+        log.warn({ err }, "failed to read iteration state, falling back to full review");
+        return { lastReviewed: null, current: null };
+      }
+    },
+    getDiffSince: (lastReviewed) => provider.getDiffSinceIteration(lastReviewed),
+    marker: (current) => ({ lastReviewedIteration: current }),
+  };
+}
 
-  const { anchored: inlineFindings, dropped } = filterAnchorableFindings(
-    review.findings,
-    reviewable,
-  );
-  if (dropped.length > 0) {
-    log.warn(
-      {
-        droppedCount: dropped.length,
-        samples: dropped.slice(0, 5).map((d) => ({
-          file: d.finding.file,
-          line: d.finding.line,
-          reason: d.reason,
-        })),
-      },
-      "dropped findings that don't anchor to the diff before posting inline comments",
-    );
-  }
-  await provider.postInlineComments(inlineFindings);
+export function buildPlatform(parsed: ReturnType<typeof parseConfig>): ReviewPlatform {
+  const { provider, config, failOnCritical, incrementalReview, env } = parsed;
+  return {
+    label: "PR",
+    provider,
+    config,
+    failOnCritical,
+    incrementalReview,
+    renameTitleToConventional: process.env.RUSTY_RENAME_TITLE_TO_CONVENTIONAL === "true",
+    generateDescription: process.env.RUSTY_GENERATE_DESCRIPTION === "true",
+    maxTokens: MAX_TOKENS,
+    // the pipeline's shallow checkout is the merge commit; the PR head is fetched with System.AccessToken
+    workspacePath: process.env.BUILD_SOURCESDIRECTORY,
+    fetchAuthHeader: `bearer ${env.accessToken}`,
+    incremental: iterationIncremental(provider),
+    ticketSource: "azure-devops",
+    getLinkedTicketIds: () => provider.getLinkedWorkItemIds(),
+    buildTicketProviders: (refs) => {
+      const providers = new Map<string, TicketProvider>();
+      if (refs.some((r) => r.source === "azure-devops")) {
+        providers.set(
+          "azure-devops",
+          new AzureDevOpsTicketProvider({
+            orgUrl: env.orgUrl,
+            project: env.project,
+            pat: env.accessToken,
+          }),
+        );
+      }
+      return providers;
+    },
+  };
+}
 
-  log.info(
-    { inlineComments: inlineFindings.length, droppedAnchors: dropped.length },
-    "posted summary and inline comments",
-  );
-
-  if (failOnCritical && criticalCount > 0) {
-    log.warn({ criticalCount }, "failing pipeline due to critical issues");
-    process.exit(1);
-  }
+export async function main(): Promise<number> {
+  configureGlobalHttp();
+  return runPrReview(buildPlatform(parseConfig()));
 }
 
 // only run when invoked directly, not when imported in tests
 const isDirectRun = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
 
 if (isDirectRun) {
-  main().catch((err: unknown) => {
-    log.fatal({ err }, "fatal error");
-    flushLogger(() => process.exit(2));
-  });
+  main()
+    .then((code) => flushLogger(() => process.exit(code)))
+    .catch((err: unknown) => {
+      log.fatal({ err }, "fatal error");
+      flushLogger(() => process.exit(2));
+    });
 }

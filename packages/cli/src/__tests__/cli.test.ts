@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as RustyBotCore from "@rusty-bot/core";
 import type { FilePatch } from "@rusty-bot/core";
-import { runMultiCallReview } from "@rusty-bot/core";
+import { runTriagedReview } from "@rusty-bot/core";
 import { run } from "../cli.js";
 import type { CliArgs } from "../args.js";
 
@@ -46,10 +46,9 @@ vi.mock("@rusty-bot/core", async (importOriginal) => {
   const actual = await importOriginal<typeof RustyBotCore>();
   return {
     ...actual,
-    isCascadeEnabled: vi.fn(() => false),
     fetchConventionFile: vi.fn().mockResolvedValue(null),
     loadMcpServerConfigsFromEnv: vi.fn().mockResolvedValue([]),
-    runMultiCallReview: vi.fn().mockResolvedValue({
+    runTriagedReview: vi.fn().mockResolvedValue({
       summary: "ok",
       findings: [],
       recommendation: "approve",
@@ -79,7 +78,7 @@ describe("run", () => {
     const code = await run(args);
 
     expect(code).toBe(0);
-    const reviewed = vi.mocked(runMultiCallReview).mock.calls[0]?.[0];
+    const reviewed = vi.mocked(runTriagedReview).mock.calls[0]?.[0].patches;
     expect(reviewed?.map((p) => p.path)).toEqual(["src/auth/check.ts"]);
     expect(reviewed?.[0].deletions).toBe(2);
   });
@@ -87,6 +86,6 @@ describe("run", () => {
   it("passes the provider's checkout into the review options", async () => {
     await run(args);
 
-    expect(vi.mocked(runMultiCallReview).mock.calls[0]?.[4]?.checkout).toBe(fakeCheckout);
+    expect(vi.mocked(runTriagedReview).mock.calls[0]?.[0].options.checkout).toBe(fakeCheckout);
   });
 });

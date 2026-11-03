@@ -236,17 +236,19 @@ function buildStepLogger(
     if (typeof step !== "object" || step === null) return;
     const s = step as {
       finishReason?: unknown;
-      toolCalls?: { length?: number };
+      toolCalls?: { toolName?: unknown }[];
       usage?: { totalTokens?: number; inputTokens?: number; outputTokens?: number };
       warnings?: unknown[];
     };
+    const toolCalls = Array.isArray(s.toolCalls) ? s.toolCalls : [];
     log.info(
       {
         ...bindings,
         attempt,
         stepNumber,
         finishReason: s.finishReason,
-        toolCallCount: s.toolCalls?.length ?? 0,
+        toolCallCount: toolCalls.length,
+        toolNames: toolCalls.flatMap((c) => (typeof c.toolName === "string" ? [c.toolName] : [])),
         totalTokens: s.usage?.totalTokens,
         inputTokens: s.usage?.inputTokens,
         outputTokens: s.usage?.outputTokens,

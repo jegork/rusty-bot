@@ -1067,6 +1067,51 @@ describe("runReview step log attempts", () => {
     delete process.env.RUSTY_LOG_AGENT_STEPS;
   });
 
+  async function loggedStepsFor(steps: unknown[]) {
+    generateMock.mockImplementation(async (opts: Record<string, unknown>) => {
+      const onStepFinish = opts.onStepFinish as (s: unknown) => void;
+      for (const step of steps) onStepFinish(step);
+      return makeValidResponse();
+    });
+    await runReview(config, "diff", prMetadata);
+    return logMock.info.mock.calls
+      .filter(([, msg]) => msg === "agent step finished")
+      .map(([o]) => o);
+  }
+
+  it("logs the tool names of each step, keeping repeats so they can be counted", async () => {
+    const [first, second] = await loggedStepsFor([
+      {
+        finishReason: "tool-calls",
+        toolCalls: [
+          { toolName: "searchCode" },
+          { toolName: "findSymbol" },
+          { toolName: "searchCode" },
+        ],
+      },
+      { finishReason: "stop", toolCalls: [] },
+    ]);
+
+    expect(first.toolNames).toEqual(["searchCode", "findSymbol", "searchCode"]);
+    expect(first.toolCallCount).toBe(3);
+    expect(second.toolNames).toEqual([]);
+    expect(second.toolCallCount).toBe(0);
+  });
+
+  it("logs no tool names when a step has no tool calls field or malformed entries", async () => {
+    const [missing, malformed] = await loggedStepsFor([
+      { finishReason: "stop" },
+      {
+        finishReason: "tool-calls",
+        toolCalls: [{}, { toolName: 42 }, { toolName: "getFileContext" }],
+      },
+    ]);
+
+    expect(missing.toolNames).toEqual([]);
+    expect(malformed.toolNames).toEqual(["getFileContext"]);
+    expect(malformed.toolCallCount).toBe(3);
+  });
+
   it("restarts stepNumber at 0 and bumps attempt on a transient retry", async () => {
     const step = { finishReason: "tool-calls", toolCalls: [{}], usage: {}, warnings: [] };
     generateMock.mockImplementation(async (opts: Record<string, unknown>) => {

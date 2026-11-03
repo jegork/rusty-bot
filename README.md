@@ -231,7 +231,7 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 | `RUSTY_LLM_BODY_TIMEOUT_MS` | undici body timeout for outbound `fetch`; resets per chunk so generations longer than this still complete as long as chunks keep arriving | `600000` |
 | `RUSTY_OLLAMA_BASE_URL` | base URL for the `ollama/*` provider — set to `https://ollama.com` for [Ollama Cloud](https://ollama.com), or a remote host for self-hosted Ollama | `http://127.0.0.1:11434` |
 | `RUSTY_OLLAMA_API_KEY` | bearer token for the `ollama/*` provider (required for Ollama Cloud, ignored for unauthenticated local instances); falls back to `OLLAMA_API_KEY` | — |
-| `RUSTY_LOG_AGENT_STEPS` | when `true`, log a line per agent step (`stepNumber`, `finishReason`, `toolCallCount`, token usage); diagnostic for slow / tool-looping passes | `false` |
+| `RUSTY_LOG_AGENT_STEPS` | when `true`, log a line per agent step (`stepNumber`, `finishReason`, `toolCallCount`, `toolNames`, token usage); diagnostic for slow / tool-looping passes | `false` |
 | `RUSTY_LOG_RAW_FINDINGS` | when `true`, log each consensus pass's findings before clustering (file/line/severity/category/message); diagnostic for tuning Jaccard / line-proximity thresholds | `false` |
 | `RUSTY_LOG_RAW_FINDINGS_FILE` | with `RUSTY_LOG_RAW_FINDINGS=true`, also append the per-pass and cluster records (with each cluster's variants) to this path as NDJSON, regardless of `LOG_LEVEL`; write failures only warn | — |
 | `RUSTY_CONSENSUS_PASSES` | consensus pass count when the repo config does not set `consensusPasses` (integer 1-5; anything else warns and uses the default) | `3` |
@@ -603,9 +603,9 @@ Three opt-in flags surface internal state for debugging slow consensus runs, tun
 **`RUSTY_LOG_AGENT_STEPS=true`** — one log line per agent step inside every `runReview` call:
 
 ```jsonc
-{ "stepNumber": 0, "finishReason": "tool-calls", "toolCallCount": 3, "totalTokens": 12450, ... }
-{ "stepNumber": 1, "finishReason": "tool-calls", "toolCallCount": 1, "totalTokens": 8200, ... }
-{ "stepNumber": 2, "finishReason": "stop", "toolCallCount": 0, "totalTokens": 6100, ... }
+{ "stepNumber": 0, "finishReason": "tool-calls", "toolCallCount": 3, "toolNames": ["searchCode", "searchCode", "getFileContext"], "totalTokens": 12450, ... }
+{ "stepNumber": 1, "finishReason": "tool-calls", "toolCallCount": 1, "toolNames": ["findSymbol"], "totalTokens": 8200, ... }
+{ "stepNumber": 2, "finishReason": "stop", "toolCallCount": 0, "toolNames": [], "totalTokens": 6100, ... }
 ```
 
 Useful when a pass takes minutes and you can't tell whether the model is making forward progress (decreasing tool calls, reasonable token counts per step) or spinning in a tool-call loop (constant or growing tool calls, no `"stop"` ever). Particularly diagnostic for the `finishReason: "tool-calls"` failure mode where a tool-happy model burns its step budget without emitting a final answer — the per-step trace tells you whether `RUSTY_LLM_MAX_STEPS` saved the day or got hit.

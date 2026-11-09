@@ -1,21 +1,8 @@
-import { execFileSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Octokit } from "octokit";
-import type * as RustyBotCore from "@rusty-bot/core";
-import type { FilePatch, OpenGrepFinding, PRMetadata } from "@rusty-bot/core";
-import {
-  gitEnv,
-  isCascadeEnabled,
-  parseDiff,
-  runOpenGrep,
-  runTriage,
-  runCascadeReview,
-} from "@rusty-bot/core";
-import { GitHubProvider, createOctokitIssueFetcher } from "@rusty-bot/github";
-import { parseConfig, runAction, type ActionConfig } from "../cli.js";
+import type { PRMetadata } from "@rusty-bot/core";
+import { GitHubProvider } from "@rusty-bot/github";
+import { buildPlatform, parseConfig, type ActionConfig } from "../cli.js";
 import type { PullRequestEvent } from "../event.js";
 
 vi.mock("@rusty-bot/github", async () => ({
@@ -23,18 +10,6 @@ vi.mock("@rusty-bot/github", async () => ({
   RustyOctokit: (await import("octokit")).Octokit,
   createOctokitIssueFetcher: vi.fn(() => vi.fn()),
 }));
-
-vi.mock("@rusty-bot/core", async (importOriginal) => {
-  const actual = await importOriginal<typeof RustyBotCore>();
-  return {
-    ...actual,
-    isCascadeEnabled: vi.fn(),
-    parseDiff: vi.fn(),
-    runOpenGrep: vi.fn(),
-    runTriage: vi.fn(),
-    runCascadeReview: vi.fn(),
-  };
-});
 
 const BASE_EVENT: PullRequestEvent = {
   action: "opened",
@@ -343,200 +318,96 @@ describe("parseConfig", () => {
   });
 });
 
-describe("runAction cascade triage wiring", () => {
-  const METADATA: PRMetadata = {
-    id: "1",
-    title: "feat: add stuff",
-    description: "",
-    author: "octocat",
-    sourceBranch: "feature/x",
-    targetBranch: "main",
-    url: "https://github.com/acme/repo/pull/1",
-    headSha: "abc123",
-  };
-
-  const FIXTURE_PATCH: FilePatch = {
-    path: "src/index.ts",
-    hunks: [
-      {
-        oldStart: 1,
-        oldLines: 1,
-        newStart: 1,
-        newLines: 2,
-        content: "+added line\n context line",
-      },
-    ],
-    additions: 1,
-    deletions: 0,
-    isBinary: false,
-  };
-
-  const OPEN_GREP_FINDING: OpenGrepFinding = {
-    ruleId: "test-rule",
-    file: "src/index.ts",
-    startLine: 1,
-    endLine: 1,
-    message: "test finding",
-    severity: "error",
-  };
-
-  function makeMockProvider() {
-    return {
-      getPRMetadata: vi.fn().mockResolvedValue(METADATA),
-      getFileContent: vi.fn().mockResolvedValue(null),
-      deleteExistingBotComments: vi.fn().mockResolvedValue(undefined),
-      getRawDiff: vi.fn().mockResolvedValue(""),
-      getLinkedIssueNumbers: vi.fn().mockResolvedValue([]),
-      postSummaryComment: vi.fn().mockResolvedValue(undefined),
-      postInlineComments: vi.fn().mockResolvedValue(undefined),
-      updatePRTitle: vi.fn().mockResolvedValue(undefined),
-      updatePRDescription: vi.fn().mockResolvedValue(undefined),
-      getLastReviewedSha: vi.fn().mockResolvedValue(null),
-      getDiffSinceSha: vi.fn().mockResolvedValue(null),
-      getPriorReviewContext: vi.fn().mockResolvedValue(null),
-    };
-  }
-
-  beforeEach(() => {
-    vi.stubEnv("GITHUB_WORKSPACE", undefined);
-    vi.mocked(GitHubProvider).mockImplementation(function (this: GitHubProvider) {
-      return Object.assign(this, makeMockProvider()) as unknown as GitHubProvider;
-    });
-    vi.mocked(createOctokitIssueFetcher).mockReturnValue(vi.fn());
-    vi.mocked(isCascadeEnabled).mockReturnValue(true);
-    vi.mocked(parseDiff).mockReturnValue([FIXTURE_PATCH]);
-    vi.mocked(runOpenGrep).mockResolvedValue({
-      available: true,
-      findings: [OPEN_GREP_FINDING],
-      rawCount: 1,
-    });
-    vi.mocked(runTriage).mockResolvedValue({
-      files: [{ path: FIXTURE_PATCH.path, classification: "deep-review", reason: "test" }],
-      modelUsed: "test-triage-model",
-      tokenCount: 50,
-    });
-    vi.mocked(runCascadeReview).mockResolvedValue({
-      summary: "test summary",
-      findings: [],
-      observations: [],
-      ticketCompliance: [],
-      missingTests: [],
-      filesReviewed: [FIXTURE_PATCH.path],
-      recommendation: "looks_good",
-      modelUsed: "test-review-model",
-      tokenCount: 100,
-    });
+describe("buildPlatform", () => {
+  const makeActionConfig = (overrides: Partial<ActionConfig> = {}): ActionConfig => ({
+    octokit: new Octokit({ auth: "test-token" }),
+    owner: "acme",
+    repo: "repo",
+    pullNumber: 1,
+    token: "test-token",
+    review: { style: "balanced", focusAreas: ["security"], ignorePatterns: [] },
+    failOnCritical: true,
+    generateDescription: true,
+    renameTitleToConventional: false,
+    incrementalReview: false,
+    ...overrides,
   });
 
-  afterEach(async () => {
+  function useProvider(methods: Record<string, unknown> = {}) {
+    vi.mocked(GitHubProvider).mockImplementation(function (this: GitHubProvider) {
+      return Object.assign(this, methods) as unknown as GitHubProvider;
+    });
+  }
+
+  afterEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
-    await Promise.all(tempDirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
   });
 
-  const tempDirs: string[] = [];
+  it("carries the parsed config through and caps the diff for github-hosted runners", () => {
+    useProvider();
+    const review = { style: "strict" as const, focusAreas: [], ignorePatterns: [] };
 
-  // a real repo whose HEAD commit stands in for the PR head
-  async function setupRepo(): Promise<{ path: string; headSha: string }> {
-    const path = await mkdtemp(join(tmpdir(), "rusty-action-"));
-    tempDirs.push(path);
-    const env = gitEnv({
-      GIT_AUTHOR_NAME: "Test User",
-      GIT_AUTHOR_EMAIL: "test@example.com",
-      GIT_COMMITTER_NAME: "Test User",
-      GIT_COMMITTER_EMAIL: "test@example.com",
-    });
-    const git = (args: string[]) => execFileSync("git", args, { cwd: path, env }).toString().trim();
-    git(["init", "--initial-branch=main", "--quiet"]);
-    git(["config", "commit.gpgsign", "false"]);
-    await writeFile(join(path, "index.ts"), "export const fromCheckout = 1;\n");
-    git(["add", "."]);
-    git(["commit", "-m", "head", "--quiet"]);
-    return { path, headSha: git(["rev-parse", "HEAD"]) };
-  }
+    const platform = buildPlatform(makeActionConfig({ review, incrementalReview: true }));
 
-  function useProvider(metadata: PRMetadata) {
-    const provider = { ...makeMockProvider(), getPRMetadata: vi.fn().mockResolvedValue(metadata) };
-    vi.mocked(GitHubProvider).mockImplementation(function (this: GitHubProvider) {
-      return Object.assign(this, provider) as unknown as GitHubProvider;
-    });
-    return provider;
-  }
-
-  function reviewOptions() {
-    return vi.mocked(runCascadeReview).mock.calls[0][5];
-  }
-
-  it("runs with provider-backed tools when GITHUB_WORKSPACE is unset", async () => {
-    const provider = useProvider(METADATA);
-
-    await expect(runAction(makeActionConfig())).resolves.toBe(0);
-
-    expect(reviewOptions()?.checkout).toBeUndefined();
-    expect(reviewOptions()?.provider).toBeDefined();
-    expect(provider.getFileContent).toHaveBeenCalledWith(FIXTURE_PATCH.path, "feature/x");
-  });
-
-  it("falls back to provider tools when GITHUB_WORKSPACE is not a git repo", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "rusty-action-empty-"));
-    tempDirs.push(dir);
-    vi.stubEnv("GITHUB_WORKSPACE", dir);
-    useProvider(METADATA);
-
-    await runAction(makeActionConfig());
-
-    expect(reviewOptions()?.checkout).toBeUndefined();
-  });
-
-  it("passes a checkout at the PR head sha and expands context from it", async () => {
-    const repo = await setupRepo();
-    vi.stubEnv("GITHUB_WORKSPACE", repo.path);
-    const provider = useProvider({ ...METADATA, headSha: repo.headSha });
-
-    await runAction(makeActionConfig());
-
-    const checkout = reviewOptions()?.checkout;
-    expect(checkout?.tree).toBe(repo.headSha);
-    expect(checkout?.approximate).toBe(false);
-    // only the convention-file lookup, against the target branch, may still hit the API
-    for (const [, ref] of provider.getFileContent.mock.calls) expect(ref).toBe("main");
-  });
-
-  function makeActionConfig(): ActionConfig {
-    return {
-      octokit: new Octokit({ auth: "test-token" }),
-      owner: "acme",
-      repo: "repo",
-      pullNumber: 1,
-      token: "test-token",
-      review: { style: "balanced", focusAreas: ["security"], ignorePatterns: [] },
+    expect(platform).toMatchObject({
+      label: "PR",
+      config: review,
       failOnCritical: true,
-      generateDescription: false,
+      generateDescription: true,
       renameTitleToConventional: false,
-      incrementalReview: false,
-    };
-  }
+      incrementalReview: true,
+      maxTokens: 60_000,
+      ticketSource: "github",
+    });
+  });
 
-  it("passes opengrep findings to runTriage when the cascade path runs", async () => {
-    const config: ActionConfig = {
-      octokit: new Octokit({ auth: "test-token" }),
-      owner: "acme",
-      repo: "repo",
-      pullNumber: 1,
-      token: "test-token",
-      review: { style: "balanced", focusAreas: ["security"], ignorePatterns: [] },
-      failOnCritical: true,
-      generateDescription: false,
-      renameTitleToConventional: false,
-      incrementalReview: false,
-    };
+  it("uses GITHUB_WORKSPACE, and the job token as a basic auth header, for the checkout", () => {
+    useProvider();
+    vi.stubEnv("GITHUB_WORKSPACE", "/github/workspace");
 
-    await runAction(config);
+    const platform = buildPlatform(makeActionConfig());
 
-    expect(runTriage).toHaveBeenCalledWith(
-      expect.arrayContaining([expect.objectContaining({ path: FIXTURE_PATCH.path })]),
-      [OPEN_GREP_FINDING],
-    );
+    expect(platform.workspacePath).toBe("/github/workspace");
+    const encoded = platform.fetchAuthHeader?.replace(/^basic /, "");
+    expect(Buffer.from(encoded ?? "", "base64").toString()).toBe("x-access-token:test-token");
+  });
+
+  it("has no workspace when GITHUB_WORKSPACE is unset", () => {
+    useProvider();
+    vi.stubEnv("GITHUB_WORKSPACE", undefined);
+
+    expect(buildPlatform(makeActionConfig()).workspacePath).toBeUndefined();
+  });
+
+  it("reports linked issue numbers as ticket ids", async () => {
+    useProvider({ getLinkedIssueNumbers: vi.fn().mockResolvedValue([12, 34]) });
+
+    await expect(buildPlatform(makeActionConfig()).getLinkedTicketIds()).resolves.toEqual([
+      "12",
+      "34",
+    ]);
+  });
+
+  it("tracks reviewed revisions by head sha", async () => {
+    const getLastReviewedSha = vi.fn().mockResolvedValue("old");
+    useProvider({ getLastReviewedSha });
+    const { incremental } = buildPlatform(makeActionConfig());
+
+    const state = await incremental.readState({ headSha: "new" } as PRMetadata, true);
+
+    expect(state).toEqual({ lastReviewed: "old", current: "new" });
+    expect(incremental.marker("new")).toEqual({ lastReviewedSha: "new" });
+  });
+
+  it("always offers the github ticket provider, and jira and linear only when configured", () => {
+    useProvider();
+    vi.stubEnv("RUSTY_JIRA_BASE_URL", undefined);
+    vi.stubEnv("RUSTY_LINEAR_API_KEY", "linear-key");
+
+    const providers = buildPlatform(makeActionConfig()).buildTicketProviders([]);
+
+    expect([...providers.keys()]).toEqual(["github", "linear"]);
   });
 });
 

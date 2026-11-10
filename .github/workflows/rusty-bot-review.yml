@@ -18,7 +18,11 @@ jobs:
   review:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # bot PRs (release-please, dependabot) get no secrets and GitHub holds their
+    # runs for approval, so the review could never start on them
+    if: >
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.type != 'Bot'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 

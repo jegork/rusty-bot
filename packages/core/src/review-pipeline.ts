@@ -1,6 +1,8 @@
 import { runCascadeReview, runMultiCallReview } from "./agent/multi-call.js";
 import type { MultiCallReviewOptions } from "./agent/multi-call.js";
 import { buildPriorContextFromReview } from "./agent/prior-context.js";
+import { compareRiskLevels, mergeRiskAssessments, readRiskLabel } from "./agent/risk.js";
+import type { RiskLabelResult } from "./agent/risk.js";
 import { fetchConventionFile } from "./convention-file.js";
 import { generatePRDescription, shouldGenerateDescription } from "./description/generate.js";
 import { filterAnchorableFindings } from "./diff/anchor.js";
@@ -8,10 +10,12 @@ import { expandContext } from "./diff/context.js";
 import { filterFiles } from "./diff/filter.js";
 import { summarizeLanguages } from "./diff/language.js";
 import { formatSummaryComment } from "./formatter/summary.js";
+import { formatMissingRiskLabelComment, formatRiskDisagreementComment } from "./formatter/risk.js";
 import { logger } from "./logger.js";
 import { loadMcpServerConfigsFromEnv } from "./mcp/client.js";
 import { extractChangedFilePaths, runOpenGrep } from "./opengrep/runner.js";
 import { resolveRepoCheckout } from "./repo/resolve.js";
+import { fetchRepoConfig, fetchRiskPrompt, type RiskPolicy } from "./repo-config.js";
 import { extractTicketRefs } from "./tickets/extract.js";
 import { resolveTicketsWithStatus } from "./tickets/resolve.js";
 import { generateConventionalTitle } from "./title/generate.js";
@@ -25,6 +29,7 @@ import type {
   PriorReviewContext,
   ReviewConfig,
   ReviewResult,
+  RiskLevel,
   TicketInfo,
   TicketProvider,
   TicketRef,
@@ -139,6 +144,73 @@ export interface ReviewPlatform {
   buildTicketProviders(refs: TicketRef[]): Map<string, TicketProvider>;
   /** adjusts refs extracted from the description, e.g. bare #N belongs to GitLab on GitLab */
   normalizeTicketRefs?(refs: TicketRef[]): TicketRef[];
+  /** risk policy from the platform's env; the repo's `.rusty-bot.json` overrides it when present */
+  riskPolicy?: RiskPolicy;
+}
+
+// a label read that fails for transport reasons must not fail the PR, and a
+// platform without labels cannot enforce one: both read as "could not check"
+async function readAuthorRiskLabel(
+  provider: GitProvider,
+  risk: RiskPolicy | undefined,
+): Promise<RiskLabelResult | null> {
+  if (!risk?.enabled || !provider.getLabels) return null;
+  try {
+    const labels = await provider.getLabels();
+    const result = readRiskLabel(labels, risk.labelPrefix);
+    log.info({ labels, result }, "read author risk label");
+    return result;
+  } catch (err) {
+    log.warn({ err }, "failed to read PR labels; skipping risk label enforcement");
+    return null;
+  }
+}
+
+async function enforceRiskLabel(
+  provider: GitProvider,
+  risk: RiskPolicy | undefined,
+  authorRisk: RiskLabelResult | null,
+): Promise<boolean> {
+  if (!risk?.requireLabel || authorRisk === null || authorRisk.status === "ok") return true;
+  await provider.postStandaloneComment?.(
+    formatMissingRiskLabelComment(authorRisk, risk.labelPrefix),
+    { tag: RISK_LABEL_TAG },
+  );
+  log.warn({ status: authorRisk.status }, "PR has no usable risk label");
+  return false;
+}
+
+const RISK_LABEL_TAG = "risk-label";
+const RISK_DISAGREEMENT_TAG = "risk-disagreement";
+
+/** the policy file is read from the target branch, so a PR cannot relax the gate that reviews it */
+async function resolveRiskPolicy(
+  platform: ReviewPlatform,
+  metadata: PRMetadata,
+  config: ReviewConfig,
+): Promise<RiskPolicy | undefined> {
+  const { provider } = platform;
+  // the strict reader tells a missing file from a failed read, so a transient
+  // error fails the run instead of switching the policy off for that run
+  const getFileContent = (path: string, ref: string) =>
+    provider.readFile ? provider.readFile(path, ref) : provider.getFileContent(path, ref);
+  const repoConfig = await fetchRepoConfig(getFileContent, metadata.targetBranch);
+  const risk = repoConfig?.risk ?? platform.riskPolicy;
+  if (!risk) return undefined;
+  config.assessRisk = risk.enabled;
+  config.riskReasons = risk.reasons;
+  if (risk.enabled && risk.promptFile) {
+    config.riskPrompt = await fetchRiskPrompt(
+      getFileContent,
+      metadata.targetBranch,
+      risk.promptFile,
+    );
+  }
+  log.info(
+    { source: repoConfig?.risk ? "repo config" : "env", enabled: risk.enabled },
+    "resolved risk policy",
+  );
+  return risk;
 }
 
 async function renameTitle(platform: ReviewPlatform, patches: FilePatch[], metadata: PRMetadata) {
@@ -264,6 +336,8 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
     ...platform.config,
     ...(conventionFile && { conventionFile }),
   };
+  const risk = await resolveRiskPolicy(platform, metadata, config);
+  const authorRisk = await readAuthorRiskLabel(provider, risk);
 
   // read the marker and prior context before deleting old bot comments, which hold them
   const { lastReviewed, current } = await incremental.readState(
@@ -281,7 +355,12 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
 
   if (lastReviewed && current && lastReviewed === current) {
     log.info({ revision: current }, "this revision was already reviewed, skipping review");
-    return 0;
+    // relabelling creates no revision, so a re-run lands here; the label still
+    // has to be checked or a missing-label failure would be sticky. the full
+    // path closes every bot thread, this one only the earlier label reminders,
+    // so a re-run never stacks them and a now-present label clears them
+    if (risk?.enabled) await provider.closeStandaloneComments?.(RISK_LABEL_TAG);
+    return (await enforceRiskLabel(provider, risk, authorRisk)) ? 0 : 1;
   }
 
   await provider.deleteExistingBotComments();
@@ -313,7 +392,8 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
       "No reviewable changes since the last review.",
       incremental.marker(current),
     );
-    return 0;
+    // the gate applies on every run; the old reminder was closed above with the other bot threads
+    return (await enforceRiskLabel(provider, risk, authorRisk)) ? 0 : 1;
   }
 
   if (platform.renameTitleToConventional) {
@@ -365,6 +445,16 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
     ...(openGrepResult.error ? { error: openGrepResult.error } : {}),
   };
 
+  // an incremental pass only saw the new diff; the PR stays as risky as its riskiest part
+  if (incrementalUsed && priorContext?.riskAssessment) {
+    const merged = mergeRiskAssessments([
+      { ...review, riskAssessment: priorContext.riskAssessment },
+      review,
+    ]);
+    if (merged) review.riskAssessment = merged;
+  }
+  const authorRiskLevel: RiskLevel | null = authorRisk?.status === "ok" ? authorRisk.level : null;
+
   const criticalCount = review.findings.filter((f) => f.severity === "critical").length;
   log.info(
     {
@@ -372,20 +462,46 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
       critical: criticalCount,
       warnings: review.findings.filter((f) => f.severity === "warning").length,
       recommendation: review.recommendation,
+      riskLevel: review.riskAssessment?.level,
+      authorRiskLevel,
     },
     "review complete",
   );
 
   await provider.postSummaryComment(
-    formatSummaryComment(review, { ticketResolution }),
+    formatSummaryComment(review, { ticketResolution, authorRiskLevel }),
     current
       ? { ...incremental.marker(current), priorContext: buildPriorContextFromReview(review) }
       : undefined,
   );
   await postInlineFindings(provider, review, reviewable);
 
+  // a higher bot rating is an argument, not a verdict: it opens a thread the
+  // author has to answer or act on, and leaves the exit code alone
+  if (
+    risk &&
+    review.riskAssessment &&
+    authorRiskLevel &&
+    compareRiskLevels(review.riskAssessment.level, authorRiskLevel) > 0
+  ) {
+    await provider.postStandaloneComment?.(
+      formatRiskDisagreementComment(authorRiskLevel, review.riskAssessment, risk.labelPrefix),
+      { tag: RISK_DISAGREEMENT_TAG },
+    );
+    log.info(
+      { authorRiskLevel, botRiskLevel: review.riskAssessment.level },
+      "posted risk label disagreement",
+    );
+  }
+
+  const labelOk = await enforceRiskLabel(provider, risk, authorRisk);
+
   if (platform.failOnCritical && criticalCount > 0) {
     log.warn({ criticalCount }, "failing due to critical issues");
+    return 1;
+  }
+  if (!labelOk) {
+    log.warn("failing because the PR has no usable risk label");
     return 1;
   }
   return 0;

@@ -1,0 +1,10 @@
+Risk assessment is enabled. Judge the PR as a whole, not file by file, by answering three questions about what happens if the change is wrong:
+- Who is affected? One user or one screen; the users of one feature or one customer; or every user, all stored data, or the whole service (including anything that can exhaust memory or crash the process for everyone).
+- How would the defect be found? The user sees it right away; it shows up in logs, metrics or a failing job; or nobody would notice: wrong values presented as correct, a job that reports success while doing nothing, data exposed to someone who should not see it.
+- Does a redeploy undo it? Yes; yes after a job or migration is re-run as well; or no, because stored data must be repaired by hand or has already left the system.
+
+Rules:
+- Intent does not lower risk. A refactor, rename or cleanup that touches a risky area is as risky as a feature there.
+- Changes to what a user is allowed to see or do, to stored data in bulk, to a contract with an external system, or to values presented as correct are usually unnoticed and often not undone by a redeploy.
+- Adding a nullable column, changing copy, styling, tests, docs or tooling usually affects few users, is seen immediately and is undone by a redeploy.
+- Answer from the diff you reviewed. Do not speculate about files you did not see.

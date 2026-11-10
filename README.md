@@ -18,6 +18,7 @@ Built on the [AI SDK](https://ai-sdk.dev) (TypeScript).
 - **Multi-provider LLM** — OpenAI, Anthropic, Google, OpenRouter, Requesty, Azure OpenAI / AI Foundry, Ollama, or any OpenAI-compatible endpoint
 - **PR description generation** — optionally generate a structured PR description from the diff when the description is empty or a placeholder (off by default)
 - **Scope creep detection** — optionally list changes in the diff that fall outside the PR's stated intent (title, description, linked tickets) in a dedicated summary section (off by default; enable with `RUSTY_FLAG_SCOPE_CREEP=true`)
+- **Risk assessment** — optionally rate each PR low, medium or high from three answers (who is affected if it is wrong, how it would be noticed, whether a redeploy undoes it). The level is derived in code from the answers, shown in the summary, and compared with the author's `risk:` label on Azure DevOps: a higher bot rating opens an active thread with the reasoning; a missing label fails the task (off until a repo adds a `risk` section to `.rusty-bot.json`, which enables assessment and label enforcement together, or the pipeline sets `RUSTY_RISK_ASSESSMENT=true`)
 - **Incremental review** — on subsequent pushes the bot reviews only the diff since the previously-reviewed state (commit on GitHub/GitLab, PR iteration on Azure DevOps) instead of the entire PR, cutting tokens on multi-commit PRs. The previous summary, recommendation, and surfaced findings are carried forward so the agent keeps PR-wide context without re-reading the full diff (on by default; opt out with `RUSTY_INCREMENTAL_REVIEW=false`)
 - **GitHub + GitLab + Azure DevOps + local CLI** — a drop-in GitHub Action, pipeline task for Azure DevOps, GitLab CI job, or a `rusty-bot` CLI that runs reviews against any local git repo
 
@@ -270,6 +271,9 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 | `RUSTY_GENERATE_DESCRIPTION` | generate PR description when empty/placeholder | `false` |
 | `RUSTY_RENAME_TITLE_TO_CONVENTIONAL` | rewrite non-conventional PR titles into Conventional Commits format | `false` |
 | `RUSTY_FLAG_SCOPE_CREEP` | list changes that fall outside the PR's stated intent in a "Scope Creep" section of the summary comment | `false` |
+| `RUSTY_RISK_ASSESSMENT` | ask the review to rate the PR's risk (who is affected, how a defect would be noticed, whether a redeploy undoes it) and compare it with the author's `risk:` label. The label comparison needs a provider with label support (Azure DevOps today); other platforms get the assessment in the summary. Fallback for repos without a `risk` section in `.rusty-bot.json` | `false` |
+| `RUSTY_RISK_LABEL_PREFIX` | PR label prefix the author's level is read from (`risk:low`, `risk:medium`, `risk:high`) | `risk:` |
+| `RUSTY_RISK_REQUIRE_LABEL` | with risk assessment on, exit 1 when the PR carries no (or more than one) risk label | `true` |
 | `RUSTY_LLM_MAX_RETRIES` | application-level retries on transient LLM errors (max 2) | `2` |
 | `RUSTY_LLM_MAX_STEPS` | cap on multi-step tool-using trajectories per review pass. The final allowed step is forced to `toolChoice: "none"` so the model has to emit text (and therefore structured output), which avoids tool-happy models — Anthropic in particular — terminating with `finishReason: "tool-calls"` and zero text. Unset, empty or invalid = 20. The cap is the only bound on the tool loop, so there is always one. | `20` |
 | `RUSTY_REVIEW_PASS_TIMEOUT_MS` | wall-clock budget in milliseconds for one review pass, including its retries. A pass that runs out of time is aborted and counts as failed, so consensus continues with the surviving passes. Unset, empty, non-numeric or below `1` = `480000` (8 minutes). | `480000` |
@@ -488,7 +492,44 @@ Costs: one extra LLM call per review pass (small on a cheap model) and ~3–8s o
 
 ### Per-Repository Configuration
 
-Configuration is env-only: every run reads the `RUSTY_*` variables from its CI job (see [Environment Variables](#environment-variables)), so per-repo settings live in each repo's pipeline definition.
+Review settings are read from the `RUSTY_*` variables of the CI job (see [Environment Variables](#environment-variables)). Policies that belong to a repository rather than a pipeline live in a `.rusty-bot.json` at the repo root, described below.
+
+### Repo config file
+
+Check in `.rusty-bot.json` to carry repository policy with the code. Like the convention file it is fetched from the **target branch**, so a pull request cannot change the policy that reviews it. Unknown keys are rejected and a malformed file fails the run, so a broken policy is never silently ignored. When the file is absent the bot falls back to the env vars.
+
+```json
+{
+  "risk": {
+    "enabled": true,
+    "labelPrefix": "risk:",
+    "requireLabel": true,
+    "reasons": ["migration", "authz", "financial-figures", "external-contract", "resource", "prompt", "infra", "deps", "ui-only"],
+    "promptFile": ".rusty-bot/risk.md"
+  }
+}
+```
+
+The rubric itself lives in the repo. `promptFile` names a markdown file, read from the same target branch, whose text replaces the bot's default explanation of the three questions. The bot always appends the fixed answer contract (`one_user` / `one_feature` / `everyone`, `immediate` / `monitored` / `silent`, `redeploy` / `rerun` / `repair`) and derives the level in code, so the team owns what the questions mean while the spelling and scoring of the answers cannot drift from the schema. Example `.rusty-bot/risk.md`:
+
+```markdown
+Judge the PR as a whole by answering three questions about what happens if it is wrong.
+
+- Who is affected? We run one production organisation, so scope is measured in customers and users, not tenants. Anything that reads an unbounded number of rows into memory affects everyone.
+- How would we find out? Figures shown in a report are silent when wrong; a job that reports success while sending nothing is silent.
+- Does a redeploy undo it? Bulk data rewrites, column type changes and anything already exported to the warehouse are not undone by a redeploy.
+
+Intent does not lower risk: a refactor in a risky area is as risky as a feature there.
+```
+
+| Key | Meaning | Default |
+|-----|---------|---------|
+| `risk.enabled` | ask the review for a risk assessment and compare it with the author's label (label support: Azure DevOps) | `true` |
+| `risk.labelPrefix` | PR label prefix the author's level is read from | `risk:` |
+| `risk.requireLabel` | fail the run when the PR carries no (or more than one) risk label. Note that any `risk` section turns the policy on with this default, even one that only sets `reasons` or `promptFile` | `true` |
+| `risk.reasons` | fixed vocabulary for reason tags; free-form when omitted | unset |
+| `risk.promptFile` | repo-relative markdown rubric replacing the bot's default prose; the answer contract is always appended | bot default |
+
 
 ### Convention Files
 

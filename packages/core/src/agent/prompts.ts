@@ -69,6 +69,23 @@ Prefer findSymbol / exploreCode over repeated searchCode calls when you need def
 const SCOPE_CREEP_OUTPUT_REQUIREMENT =
   "- A scopeCreep list of changes that do not serve the PR's stated intent (see the scope creep rules below). Leave the array empty when every change is in scope.";
 
+const RISK_ASSESSMENT_OUTPUT_REQUIREMENT =
+  "- A riskAssessment object answering the three risk questions for the PR as a whole (see the risk assessment rules below).";
+
+// the repo owns the prose (what the three questions mean for its product); the
+// bot owns the contract (how the answers are spelled and reported), so a
+// rewritten rubric can never desync from the schema that validates it
+function buildRiskInstructions(config: ReviewConfig): string {
+  const prose = config.riskPrompt?.trim() || loadTemplate("risk-assessment.txt");
+  const parts = [prose, loadTemplate("risk-contract.txt")];
+  if (config.riskReasons && config.riskReasons.length > 0) {
+    parts.push(
+      `Use only these reason tags: ${config.riskReasons.map((r) => `"${r}"`).join(", ")}.`,
+    );
+  }
+  return `\n${parts.join("\n\n")}`;
+}
+
 export function buildSystemPrompt(
   config: ReviewConfig,
   tier: ReviewTier = "deep-review",
@@ -84,10 +101,14 @@ export function buildSystemPrompt(
   const tierSections = TIER_PROMPT_SECTIONS[tier];
   // the skim tier's reduced schema has no scopeCreep field, so it must not be asked for one
   const scopeCreep = config.flagScopeCreep === true && tier === "deep-review";
-  const extendedOutputRequirements = scopeCreep
-    ? `${tierSections.extended_output_requirements}\n${SCOPE_CREEP_OUTPUT_REQUIREMENT}`
-    : tierSections.extended_output_requirements;
+  const assessRisk = config.assessRisk === true && tier === "deep-review";
+  const extendedOutputRequirements = [
+    tierSections.extended_output_requirements,
+    ...(scopeCreep ? [SCOPE_CREEP_OUTPUT_REQUIREMENT] : []),
+    ...(assessRisk ? [RISK_ASSESSMENT_OUTPUT_REQUIREMENT] : []),
+  ].join("\n");
   const scopeCreepInstructions = scopeCreep ? `\n${loadTemplate("scope-creep.txt")}` : "";
+  const riskAssessmentInstructions = assessRisk ? buildRiskInstructions(config) : "";
   const toolInstructions =
     codeGraphTools && tier === "deep-review"
       ? tierSections.tool_instructions + CODE_GRAPH_TOOL_INSTRUCTIONS
@@ -110,6 +131,7 @@ export function buildSystemPrompt(
       .replace("{{style_instructions}}", () => styleInstructions)
       .replace("{{focus_instructions}}", () => focusInstructions)
       .replace("{{scope_creep_instructions}}", () => scopeCreepInstructions)
+      .replace("{{risk_assessment_instructions}}", () => riskAssessmentInstructions)
       .replace("{{convention_instructions}}", () => conventionInstructions)
   );
 }

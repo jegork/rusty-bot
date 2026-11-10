@@ -93,3 +93,57 @@ describe("CodeGraph tools in the system prompt", () => {
     expect(skim).toContain("You have NO tools");
   });
 });
+
+describe("risk assessment in the system prompt", () => {
+  it("asks for the riskAssessment object only when enabled, and only on the deep tier", () => {
+    const on = { ...config, assessRisk: true };
+    expect(buildSystemPrompt(on, "deep-review")).toContain("A riskAssessment object");
+    expect(buildSystemPrompt(on, "deep-review")).toContain("Risk assessment is enabled.");
+    expect(buildSystemPrompt(on, "skim")).not.toContain("riskAssessment");
+    expect(buildSystemPrompt(config, "deep-review")).not.toContain("riskAssessment");
+    expect(buildSystemPrompt(config, "deep-review")).not.toContain(
+      "{{risk_assessment_instructions}}",
+    );
+  });
+
+  it("keeps the scope creep requirement when both optional sections are on", () => {
+    const prompt = buildSystemPrompt(
+      { ...config, assessRisk: true, flagScopeCreep: true },
+      "deep-review",
+    );
+    expect(prompt).toContain("A scopeCreep list");
+    expect(prompt).toContain("A riskAssessment object");
+  });
+});
+
+describe("repository risk rubric in the system prompt", () => {
+  it("replaces the default prose with the repo rubric and always appends the answer contract", () => {
+    const on = {
+      ...config,
+      assessRisk: true,
+      riskReasons: ["authz", "financial-figures"],
+      riskPrompt: "OUR RUBRIC: one prod org, scope counts customers",
+    };
+    const prompt = buildSystemPrompt(on, "deep-review");
+    expect(prompt).toContain("OUR RUBRIC: one prod org, scope counts customers");
+    expect(prompt).not.toContain("Risk assessment is enabled.");
+    expect(prompt).toContain('"one_user" (one user or one screen)');
+    expect(prompt).toContain("do not let it affect the merge recommendation");
+    expect(prompt).toContain('Use only these reason tags: "authz", "financial-figures".');
+    expect(prompt.indexOf("OUR RUBRIC")).toBeLessThan(prompt.indexOf('"one_user"'));
+
+    const off = buildSystemPrompt({ ...on, assessRisk: false }, "deep-review");
+    expect(off).not.toContain("OUR RUBRIC");
+    expect(off).not.toContain("Use only these reason tags");
+  });
+
+  it("uses the default prose with the same contract when the repo supplies none", () => {
+    const prompt = buildSystemPrompt(
+      { ...config, assessRisk: true, riskPrompt: "  " },
+      "deep-review",
+    );
+    expect(prompt).toContain("Risk assessment is enabled.");
+    expect(prompt).toContain('"one_user" (one user or one screen)');
+    expect(prompt).not.toContain("Use only these reason tags");
+  });
+});

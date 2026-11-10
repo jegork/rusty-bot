@@ -1263,3 +1263,156 @@ describe("CLI config parsing", () => {
     expect(config.ignorePatterns).toEqual(["*.lock"]);
   });
 });
+
+describe("AzureDevOpsProvider risk label support", () => {
+  let provider: AzureDevOpsProvider;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    provider = createProvider();
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reads PR label names from the labels endpoint", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      mockFetchResponse({ value: [{ name: "risk:high" }, { name: "bug", id: "x" }] }),
+    );
+
+    await expect(provider.getLabels()).resolves.toEqual(["risk:high", "bug"]);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      `${BASE_URL}/pullRequests/${PULL_REQUEST_ID}/labels?${API_VERSION}`,
+      expect.anything(),
+    );
+  });
+
+  it("returns an empty list for a PR without labels", async () => {
+    fetchSpy.mockResolvedValueOnce(mockFetchResponse({ value: [] }));
+    await expect(provider.getLabels()).resolves.toEqual([]);
+  });
+
+  it("posts a standalone comment as an active bot-marked thread", async () => {
+    fetchSpy.mockResolvedValueOnce(mockFetchResponse({}));
+
+    await provider.postStandaloneComment("## Risk label disagreement");
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe(`${BASE_URL}/pullRequests/${PULL_REQUEST_ID}/threads?${API_VERSION}`);
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.status).toBe(1);
+    expect(body.threadContext).toBeUndefined();
+    expect(body.comments[0].content).toContain("<!-- rusty-bot-review -->");
+    expect(body.comments[0].content).not.toContain("rusty-bot:standalone");
+    expect(body.comments[0].content).toContain("## Risk label disagreement");
+  });
+
+  it("adds a tag marker so the thread can be closed selectively", async () => {
+    fetchSpy.mockResolvedValueOnce(mockFetchResponse({}));
+    await provider.postStandaloneComment("## Risk label required", { tag: "risk-label" });
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.comments[0].content).toContain("<!-- rusty-bot:standalone:risk-label -->");
+  });
+
+  it("closes only the open threads carrying the tag", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      mockFetchResponse({
+        value: [
+          {
+            id: 1,
+            comments: [{ id: 1, content: "<!-- rusty-bot-review -->\nsummary" }],
+            status: 1,
+          },
+          {
+            id: 2,
+            comments: [
+              {
+                id: 2,
+                content:
+                  "<!-- rusty-bot-review -->\n<!-- rusty-bot:standalone:risk-label -->\nrequired",
+              },
+            ],
+            status: 1,
+          },
+          {
+            id: 3,
+            comments: [
+              {
+                id: 3,
+                content: "<!-- rusty-bot-review -->\n<!-- rusty-bot:standalone:risk-label -->\nold",
+              },
+            ],
+            status: 4,
+          },
+          {
+            id: 4,
+            comments: [
+              {
+                id: 4,
+                content:
+                  "<!-- rusty-bot-review -->\n<!-- rusty-bot:standalone:risk-disagreement -->\nhigher",
+              },
+            ],
+            status: 1,
+          },
+        ],
+      }),
+    );
+    fetchSpy.mockResolvedValue(mockFetchResponse({}));
+
+    await provider.closeStandaloneComments("risk-label");
+
+    const patches = fetchSpy.mock.calls
+      .slice(1)
+      .map(([url, init]) => [url, (init as RequestInit).method] as const);
+    expect(patches).toEqual([
+      [`${BASE_URL}/pullRequests/${PULL_REQUEST_ID}/threads/2?${API_VERSION}`, "PATCH"],
+    ]);
+    expect(JSON.parse((fetchSpy.mock.calls[1][1] as RequestInit).body as string)).toEqual({
+      status: 4,
+    });
+  });
+
+  describe("readFile", () => {
+    it("returns the content on success", async () => {
+      fetchSpy.mockResolvedValueOnce(mockFileContentResponse('{"risk": {}}'));
+      await expect(provider.readFile(".rusty-bot.json", "main")).resolves.toBe('{"risk": {}}');
+      expect(fetchSpy.mock.calls[0][0]).toContain("versionDescriptor.version=main");
+    });
+
+    it("returns null only for a 404", async () => {
+      fetchSpy.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        text: () => Promise.resolve(""),
+        json: () => Promise.resolve({}),
+        headers: new Headers(),
+      });
+      await expect(provider.readFile(".rusty-bot.json", "main")).resolves.toBeNull();
+    });
+
+    it("throws on any other failure, unlike getFileContent", async () => {
+      fetchSpy.mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        statusText: "Service Unavailable",
+        text: () => Promise.resolve(""),
+        json: () => Promise.resolve({}),
+        headers: new Headers(),
+      });
+      await expect(provider.readFile(".rusty-bot.json", "main")).rejects.toThrow(
+        "Azure DevOps API error 503 reading .rusty-bot.json on main",
+      );
+
+      fetchSpy.mockRejectedValueOnce(new Error("ECONNRESET"));
+      await expect(provider.readFile(".rusty-bot.json", "main")).rejects.toThrow("ECONNRESET");
+
+      fetchSpy.mockRejectedValueOnce(new Error("ECONNRESET"));
+      await expect(provider.getFileContent(".rusty-bot.json", "main")).resolves.toBeNull();
+    });
+  });
+});

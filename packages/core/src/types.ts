@@ -10,6 +10,9 @@ export type {
   MissingTestItem,
   ScopeCreepItem,
   ReviewOutput,
+  RiskLevel,
+  RiskAxes,
+  RiskAssessment,
 } from "./agent/schema.js";
 
 import type {
@@ -21,6 +24,7 @@ import type {
   Severity,
   ReviewOutput,
   ScopeCreepItem,
+  RiskAssessment,
 } from "./agent/schema.js";
 
 export interface DroppedFinding {
@@ -120,6 +124,8 @@ export interface ReviewResult extends ReviewOutput {
   openGrepStats?: OpenGrepStats;
   /** out-of-scope changes; only populated when `ReviewConfig.flagScopeCreep` is on */
   scopeCreep?: ScopeCreepItem[];
+  /** whole-PR risk assessment; only populated when `ReviewConfig.assessRisk` is on */
+  riskAssessment?: RiskAssessment;
 }
 
 export interface ReviewConfig {
@@ -132,6 +138,12 @@ export interface ReviewConfig {
   generateDescription?: boolean;
   /** ask the deep-review tier to list changes that fall outside the PR's stated intent */
   flagScopeCreep?: boolean;
+  /** ask the deep-review tier to assess the PR's risk on scope, detectability and reversibility */
+  assessRisk?: boolean;
+  /** fixed vocabulary for risk reason tags; free-form when unset */
+  riskReasons?: string[];
+  /** repository-owned risk rubric that replaces the bot's default prose; the answer contract is always appended */
+  riskPrompt?: string;
 }
 
 export interface PRMetadata {
@@ -178,6 +190,9 @@ export interface PriorReviewContext {
    * commits and were already approved. optional for backward compat with markers
    * encoded before this field existed; decoders treat missing as undefined. */
   filesReviewed?: string[];
+  /** risk assessment of the prior pass, so an incremental re-review that only
+   * sees the new diff cannot lower the PR-wide level below what was already seen */
+  riskAssessment?: RiskAssessment;
 }
 
 export interface Hunk {
@@ -250,6 +265,14 @@ export interface GitProvider {
   getDiffSinceSha?(sinceSha: string, headSha: string): Promise<FilePatch[] | null>;
   /** read PR-wide context (summary + findings) embedded in a previously-posted summary comment, if any */
   getPriorReviewContext?(): Promise<PriorReviewContext | null>;
+  /** PR labels, for platforms that have them; the risk policy reads the author's level from these */
+  getLabels?(): Promise<string[]>;
+  /** post a bot-marked thread that is not the summary, e.g. a risk label disagreement; `tag` lets it be closed selectively */
+  postStandaloneComment?(markdown: string, options?: { tag?: string }): Promise<void>;
+  /** close the standalone threads posted with this tag, leaving the summary and the others alone */
+  closeStandaloneComments?(tag: string): Promise<void>;
+  /** like getFileContent, but null only when the file does not exist on the ref; any other failure throws */
+  readFile?(path: string, ref: string): Promise<string | null>;
 }
 
 export interface TicketProvider {

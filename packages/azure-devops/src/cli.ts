@@ -119,6 +119,11 @@ export function buildPlatform(parsed: ReturnType<typeof parseConfig>): ReviewPla
     incremental: iterationIncremental(provider),
     ticketSource: "azure-devops",
     getLinkedTicketIds: () => provider.getLinkedWorkItemIds(),
+    riskPolicy: {
+      enabled: process.env.RUSTY_RISK_ASSESSMENT === "true",
+      labelPrefix: process.env.RUSTY_RISK_LABEL_PREFIX ?? "risk:",
+      requireLabel: process.env.RUSTY_RISK_REQUIRE_LABEL !== "false",
+    },
     buildTicketProviders: (refs) => {
       const providers = new Map<string, TicketProvider>();
       if (refs.some((r) => r.source === "azure-devops")) {

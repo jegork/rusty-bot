@@ -126,6 +126,42 @@ export const ScopeCreepSchema = z.object({
 
 export type ScopeCreepItem = z.infer<typeof ScopeCreepSchema>;
 
+export const RiskLevelSchema = z.enum(["low", "medium", "high"]);
+export type RiskLevel = z.infer<typeof RiskLevelSchema>;
+
+export const RiskScopeSchema = z.enum(["one_user", "one_feature", "everyone"]);
+export const RiskDetectabilitySchema = z.enum(["immediate", "monitored", "silent"]);
+export const RiskReversibilitySchema = z.enum(["redeploy", "rerun", "repair"]);
+
+export const RiskAssessmentOutputSchema = z.object({
+  scope: RiskScopeSchema.describe(
+    "who is affected if the change is wrong: one_user (one user or one screen), one_feature (users of one feature or one customer), everyone (every user, all stored data, or the whole service)",
+  ),
+  detectability: RiskDetectabilitySchema.describe(
+    "how a defect would be found: immediate (the user sees it right away), monitored (logs, metrics or a failing job), silent (nobody notices: wrong numbers, a silent no-op, silent data exposure)",
+  ),
+  reversibility: RiskReversibilitySchema.describe(
+    "whether a redeploy undoes a defect: redeploy (yes), rerun (yes, after re-running a job or migration), repair (no: stored data must be repaired, or data has already left the system)",
+  ),
+  reasons: z
+    .array(z.string())
+    .describe(
+      "short tags naming what drives the risk, e.g. migration, authz, external-contract, resource, infra, deps, ui-only; empty only when nothing drives it",
+    ),
+  justification: z
+    .string()
+    .describe(
+      "one paragraph explaining the three answers with reference to concrete changes in the diff",
+    ),
+});
+
+export type RiskAssessmentOutput = z.infer<typeof RiskAssessmentOutputSchema>;
+export type RiskAxes = Pick<RiskAssessmentOutput, "scope" | "detectability" | "reversibility">;
+
+// the level is derived in code from the three axes (see agent/risk.ts), so the
+// model only answers the questions and never picks the verdict itself
+export type RiskAssessment = RiskAssessmentOutput & { level: RiskLevel };
+
 export const ReviewOutputSchema = z.object({
   summary: z.string().describe("concise summary of the PR and overall assessment"),
   recommendation: RecommendationSchema.describe("merge recommendation based on findings"),
@@ -159,6 +195,33 @@ export const ScopeCreepReviewOutputSchema = ReviewOutputSchema.extend({
       "changes in the diff that do not serve the PR's stated intent; empty when every change is in scope or the intent cannot be established",
     ),
 });
+
+const RISK_ASSESSMENT_FIELD = {
+  riskAssessment: RiskAssessmentOutputSchema.describe(
+    "risk assessment of the whole PR, answering the three questions in the risk assessment rules",
+  ),
+};
+
+export const RiskReviewOutputSchema = ReviewOutputSchema.extend(RISK_ASSESSMENT_FIELD);
+export const ScopeCreepRiskReviewOutputSchema =
+  ScopeCreepReviewOutputSchema.extend(RISK_ASSESSMENT_FIELD);
+
+export type DeepReviewOutputSchema =
+  | typeof ReviewOutputSchema
+  | typeof ScopeCreepReviewOutputSchema
+  | typeof RiskReviewOutputSchema
+  | typeof ScopeCreepRiskReviewOutputSchema;
+
+/** pick the deep-review output schema for the enabled optional sections */
+export function selectDeepReviewOutputSchema(options: {
+  scopeCreep?: boolean;
+  riskAssessment?: boolean;
+}): DeepReviewOutputSchema {
+  if (options.scopeCreep && options.riskAssessment) return ScopeCreepRiskReviewOutputSchema;
+  if (options.scopeCreep) return ScopeCreepReviewOutputSchema;
+  if (options.riskAssessment) return RiskReviewOutputSchema;
+  return ReviewOutputSchema;
+}
 
 export const SkimReviewOutputSchema = z.object({
   summary: z.string().describe("concise summary of the PR and overall assessment"),

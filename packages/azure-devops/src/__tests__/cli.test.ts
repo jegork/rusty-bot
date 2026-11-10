@@ -129,3 +129,38 @@ describe("buildPlatform", () => {
     });
   });
 });
+
+describe("risk policy env fallback", () => {
+  beforeEach(() => {
+    vi.stubEnv("SYSTEM_PULLREQUEST_PULLREQUESTID", "7");
+    vi.stubEnv("SYSTEM_TEAMFOUNDATIONCOLLECTIONURI", "https://dev.azure.com/acme/");
+    vi.stubEnv("SYSTEM_TEAMPROJECT", "proj");
+    vi.stubEnv("BUILD_REPOSITORY_NAME", "repo");
+    vi.stubEnv("SYSTEM_ACCESSTOKEN", "ado-token");
+    useProvider();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("is off by default with the standard prefix and enforcement on", () => {
+    expect(buildPlatform(parseConfig()).riskPolicy).toEqual({
+      enabled: false,
+      labelPrefix: "risk:",
+      requireLabel: true,
+    });
+  });
+
+  it("reads the three env switches", () => {
+    vi.stubEnv("RUSTY_RISK_ASSESSMENT", "true");
+    vi.stubEnv("RUSTY_RISK_LABEL_PREFIX", "Risk/");
+    vi.stubEnv("RUSTY_RISK_REQUIRE_LABEL", "false");
+    expect(buildPlatform(parseConfig()).riskPolicy).toEqual({
+      enabled: true,
+      labelPrefix: "Risk/",
+      requireLabel: false,
+    });
+  });
+});

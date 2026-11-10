@@ -1,0 +1,7 @@
+Report the risk assessment as the `riskAssessment` object with exactly these values:
+- `scope`: "one_user" (one user or one screen), "one_feature" (users of one feature or one customer), "everyone" (every user, all stored data, or the whole service)
+- `detectability`: "immediate" (the user sees it right away), "monitored" (logs, metrics or a failing job), "silent" (nobody would notice)
+- `reversibility`: "redeploy" (a redeploy undoes it), "rerun" (a job or migration must be re-run as well), "repair" (stored data must be repaired or has already left the system)
+- `reasons`: short tags naming what drives the risk
+- `justification`: one paragraph that points at concrete changes in the diff
+Risk assessment is informational: do not report it as a finding, and do not let it affect the merge recommendation.

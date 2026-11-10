@@ -1,43 +1,15 @@
 import type { Octokit } from "octokit";
-import type {
-  FilePatch,
-  FocusArea,
-  PriorReviewContext,
-  ReviewConfig,
-  TicketProvider,
-  TicketRef,
-} from "@rusty-bot/core";
+import type { FocusArea, ReviewConfig, ReviewPlatform, TicketProvider } from "@rusty-bot/core";
 import {
   ReviewStyleSchema,
-  filterFiles,
-  expandContext,
-  summarizeLanguages,
-  extractTicketRefs,
-  resolveTicketsWithStatus,
-  fetchConventionFile,
   GitHubTicketProvider,
   JiraTicketProvider,
   LinearTicketProvider,
-  runMultiCallReview,
-  runCascadeReview,
-  formatSummaryComment,
-  loadMcpServerConfigsFromEnv,
   logger,
   flushLogger,
-  isCascadeEnabled,
-  runTriage,
-  splitByClassification,
-  runOpenGrep,
-  extractChangedFilePaths,
-  generatePRDescription,
-  shouldGenerateDescription,
-  generateConventionalTitle,
-  isConventionalTitle,
-  parseDiff,
-  filterAnchorableFindings,
-  buildPriorContextFromReview,
   configureGlobalHttp,
-  resolveRepoCheckout,
+  headShaIncremental,
+  runPrReview,
 } from "@rusty-bot/core";
 import { GitHubProvider, RustyOctokit, createOctokitIssueFetcher } from "@rusty-bot/github";
 import {
@@ -203,309 +175,30 @@ function buildTicketProviders(
   return providers;
 }
 
-export async function runAction(config: ActionConfig): Promise<number> {
-  const { octokit, owner, repo, pullNumber, review: reviewConfig, failOnCritical } = config;
-
+export function buildPlatform(config: ActionConfig): ReviewPlatform {
+  const { octokit, owner, repo, pullNumber } = config;
   const provider = new GitHubProvider({ octokit, owner, repo, pullNumber });
-
-  const metadata = await provider.getPRMetadata();
-  log.info(
-    {
-      owner,
-      repo,
-      prId: metadata.id,
-      source: metadata.sourceBranch,
-      target: metadata.targetBranch,
-    },
-    "reviewing PR",
-  );
-
-  // actions/checkout leaves the merge commit on disk; the PR head is fetched with the job token
-  const checkout = await resolveRepoCheckout({
-    repoPath: process.env.GITHUB_WORKSPACE,
-    headSha: metadata.headSha,
+  return {
+    label: "PR",
+    provider,
+    config: config.review,
+    failOnCritical: config.failOnCritical,
+    incrementalReview: config.incrementalReview,
+    renameTitleToConventional: config.renameTitleToConventional,
+    generateDescription: config.generateDescription,
+    maxTokens: MAX_TOKENS,
+    // actions/checkout leaves the merge commit on disk; the PR head is fetched with the job token
+    workspacePath: process.env.GITHUB_WORKSPACE,
     fetchAuthHeader: "basic " + Buffer.from(`x-access-token:${config.token}`).toString("base64"),
-  });
-  const fetchSourceFile = (path: string) =>
-    checkout ? checkout.readFile(path) : provider.getFileContent(path, metadata.sourceBranch);
-
-  const conventionFile = await fetchConventionFile(
-    (path, ref) => provider.getFileContent(path, ref),
-    metadata.targetBranch,
-  );
-  if (conventionFile) {
-    reviewConfig.conventionFile = conventionFile;
-  }
-
-  // read incremental marker + prior context before deleting old bot comments —
-  // otherwise we lose the sha and the carry-forward state
-  let lastReviewedSha: string | null = null;
-  let priorContext: PriorReviewContext | null = null;
-  if (config.incrementalReview && metadata.headSha) {
-    try {
-      lastReviewedSha = await provider.getLastReviewedSha();
-    } catch (err) {
-      log.warn({ err }, "failed to read last-reviewed sha, falling back to full review");
-    }
-    if (lastReviewedSha) {
-      try {
-        priorContext = await provider.getPriorReviewContext();
-      } catch (err) {
-        log.warn({ err }, "failed to read prior review context; continuing without it");
-      }
-    }
-  }
-
-  if (lastReviewedSha && lastReviewedSha === metadata.headSha) {
-    log.info({ sha: metadata.headSha }, "head sha matches last reviewed sha, skipping review");
-    return 0;
-  }
-
-  await provider.deleteExistingBotComments();
-
-  let rawPatches: FilePatch[] | null = null;
-  let incrementalUsed = false;
-  if (lastReviewedSha && metadata.headSha) {
-    const incremental = await provider.getDiffSinceSha(lastReviewedSha, metadata.headSha);
-    if (incremental) {
-      rawPatches = incremental;
-      incrementalUsed = true;
-      log.info(
-        { lastReviewedSha, headSha: metadata.headSha, files: incremental.length },
-        "running incremental review",
-      );
-    }
-  }
-
-  if (!rawPatches) {
-    const rawDiff = await provider.getRawDiff();
-    rawPatches = parseDiff(rawDiff);
-  }
-
-  const reviewable = filterFiles(rawPatches, reviewConfig.ignorePatterns);
-  const skippedCount = rawPatches.length - reviewable.length;
-  log.info(
-    {
-      total: rawPatches.length,
-      reviewed: reviewable.length,
-      skipped: skippedCount,
-      mode: incrementalUsed ? "incremental" : "full",
-    },
-    "files changed",
-  );
-
-  if (incrementalUsed && reviewable.length === 0 && metadata.headSha) {
-    log.info(
-      { lastReviewedSha, headSha: metadata.headSha },
-      "no reviewable changes in incremental delta, skipping LLM review",
-    );
-    await provider.postSummaryComment("No reviewable changes since the last review.", {
-      lastReviewedSha: metadata.headSha,
-    });
-    return 0;
-  }
-
-  if (config.renameTitleToConventional) {
-    try {
-      if (!isConventionalTitle(metadata.title)) {
-        const titleResult = await generateConventionalTitle(reviewable, metadata);
-        await provider.updatePRTitle(titleResult.title);
-        log.info(
-          {
-            originalTitle: metadata.title,
-            newTitle: titleResult.title,
-            model: titleResult.modelUsed,
-            tokens: titleResult.tokenCount,
-          },
-          "renamed PR title to conventional commit format",
-        );
-        metadata.title = titleResult.title;
-      }
-    } catch (err) {
-      log.warn({ err }, "failed to rename PR title, continuing with review");
-    }
-  }
-
-  if (config.generateDescription) {
-    try {
-      if (shouldGenerateDescription(metadata.description)) {
-        const descResult = await generatePRDescription(reviewable, metadata, metadata.description, {
-          incremental: incrementalUsed,
-        });
-        await provider.updatePRDescription(descResult.markdown);
-        metadata.description = descResult.markdown;
-        log.info(
-          { model: descResult.modelUsed, tokens: descResult.tokenCount },
-          "generated PR description",
-        );
-      }
-    } catch (err) {
-      log.warn({ err }, "failed to generate PR description, continuing with review");
-    }
-  }
-
-  const ticketRefs = extractTicketRefs(metadata.description, metadata.sourceBranch);
-
-  let linkedRefs: TicketRef[] = [];
-  try {
-    const linkedNumbers = await provider.getLinkedIssueNumbers();
-    const existingIds = new Set(ticketRefs.filter((r) => r.source === "github").map((r) => r.id));
-    linkedRefs = linkedNumbers
-      .filter((n) => !existingIds.has(String(n)))
-      .map((n) => ({ id: String(n), source: "github" }));
-  } catch (err) {
-    log.warn({ err }, "failed to fetch linked issues from github, continuing with extracted refs");
-  }
-  const allRefs = [...ticketRefs, ...linkedRefs];
-
-  const ticketProviders = buildTicketProviders(octokit, owner, repo, process.env);
-  const { tickets, status: ticketResolution } = await resolveTicketsWithStatus(
-    allRefs,
-    ticketProviders,
-  );
-
-  const languageSummary = summarizeLanguages(reviewable);
-  const mcpServers = await loadMcpServerConfigsFromEnv();
-
-  const openGrepResult = await runOpenGrep(extractChangedFilePaths(reviewable), {
-    config: process.env.RUSTY_OPENGREP_RULES ?? "auto",
-  });
-  const openGrepFindings = openGrepResult.findings.length > 0 ? openGrepResult.findings : undefined;
-  if (openGrepResult.available) {
-    log.info({ findingCount: openGrepResult.findings.length }, "opengrep pre-scan complete");
-  }
-
-  let review;
-
-  if (isCascadeEnabled()) {
-    log.info({ fileCount: reviewable.length }, "cascade enabled, running triage");
-
-    let triageResult;
-    try {
-      triageResult = await runTriage(reviewable, openGrepFindings);
-    } catch (err) {
-      log.warn({ err }, "triage failed, falling back to full review");
-    }
-
-    if (triageResult) {
-      const { skip, skim, deepReview } = splitByClassification(reviewable, triageResult.files);
-      log.info(
-        { skipped: skip.length, skimmed: skim.length, deepReview: deepReview.length },
-        "triage classification",
-      );
-
-      const expandedDeep = await expandContext(deepReview, fetchSourceFile);
-
-      review = await runCascadeReview(
-        skim,
-        expandedDeep,
-        reviewConfig,
-        metadata,
-        tickets.length > 0 ? tickets : undefined,
-        {
-          provider,
-          sourceRef: metadata.sourceBranch,
-          checkout: checkout ?? undefined,
-          languageSummary,
-          mcpServers,
-          maxTokens: MAX_TOKENS,
-          openGrepFindings,
-          priorContext: incrementalUsed && priorContext ? priorContext : undefined,
-        },
-      );
-
-      review.triageStats = {
-        filesSkipped: skip.length,
-        filesSkimmed: skim.length,
-        filesDeepReviewed: deepReview.length,
-        triageModelUsed: triageResult.modelUsed,
-        triageTokenCount: triageResult.tokenCount,
-      };
-    }
-  }
-
-  if (!review) {
-    const expanded = await expandContext(reviewable, fetchSourceFile);
-
-    review = await runMultiCallReview(
-      expanded,
-      reviewConfig,
-      metadata,
-      tickets.length > 0 ? tickets : undefined,
-      {
-        provider,
-        sourceRef: metadata.sourceBranch,
-        checkout: checkout ?? undefined,
-        languageSummary,
-        mcpServers,
-        maxTokens: MAX_TOKENS,
-        openGrepFindings,
-        priorContext: incrementalUsed && priorContext ? priorContext : undefined,
-      },
-    );
-  }
-
-  review.openGrepStats = {
-    available: openGrepResult.available,
-    findingCount: openGrepResult.rawCount,
-    ...(openGrepResult.error ? { error: openGrepResult.error } : {}),
+    incremental: headShaIncremental(provider),
+    ticketSource: "github",
+    getLinkedTicketIds: async () => (await provider.getLinkedIssueNumbers()).map(String),
+    buildTicketProviders: () => buildTicketProviders(octokit, owner, repo, process.env),
   };
+}
 
-  const criticalCount = review.findings.filter((f) => f.severity === "critical").length;
-  const warningCount = review.findings.filter((f) => f.severity === "warning").length;
-  log.info(
-    {
-      findings: review.findings.length,
-      critical: criticalCount,
-      warnings: warningCount,
-      recommendation: review.recommendation,
-    },
-    "review complete",
-  );
-
-  const summaryMarkdown = formatSummaryComment(review, { ticketResolution });
-  await provider.postSummaryComment(
-    summaryMarkdown,
-    metadata.headSha
-      ? {
-          lastReviewedSha: metadata.headSha,
-          priorContext: buildPriorContextFromReview(review),
-        }
-      : undefined,
-  );
-
-  const inlineCandidates = review.findings.filter((f) => f.line > 0);
-  const { anchored: inlineFindings, dropped } = filterAnchorableFindings(
-    inlineCandidates,
-    reviewable,
-  );
-  if (dropped.length > 0) {
-    log.warn(
-      {
-        droppedCount: dropped.length,
-        samples: dropped.slice(0, 5).map((d) => ({
-          file: d.finding.file,
-          line: d.finding.line,
-          reason: d.reason,
-        })),
-      },
-      "dropped findings that don't anchor to the diff before posting inline comments",
-    );
-  }
-  if (inlineFindings.length > 0) {
-    await provider.postInlineComments(inlineFindings);
-  }
-
-  log.info(
-    { inlineComments: inlineFindings.length, droppedAnchors: dropped.length },
-    "posted summary and inline comments",
-  );
-
-  if (failOnCritical && criticalCount > 0) {
-    log.warn({ criticalCount }, "failing action due to critical issues");
-    return 1;
-  }
-  return 0;
+export async function runAction(config: ActionConfig): Promise<number> {
+  return runPrReview(buildPlatform(config));
 }
 
 async function main(): Promise<number> {

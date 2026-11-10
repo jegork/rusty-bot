@@ -232,7 +232,7 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 | `RUSTY_LLM_BODY_TIMEOUT_MS` | undici body timeout for outbound `fetch`; resets per chunk so generations longer than this still complete as long as chunks keep arriving | `600000` |
 | `RUSTY_OLLAMA_BASE_URL` | base URL for the `ollama/*` provider — set to `https://ollama.com` for [Ollama Cloud](https://ollama.com), or a remote host for self-hosted Ollama | `http://127.0.0.1:11434` |
 | `RUSTY_OLLAMA_API_KEY` | bearer token for the `ollama/*` provider (required for Ollama Cloud, ignored for unauthenticated local instances); falls back to `OLLAMA_API_KEY` | — |
-| `RUSTY_LOG_AGENT_STEPS` | when `true`, log a line per agent step (`stepNumber`, `finishReason`, `toolCallCount`, token usage); diagnostic for slow / tool-looping passes | `false` |
+| `RUSTY_LOG_AGENT_STEPS` | when `true`, log a line per agent step (`stepNumber`, `finishReason`, `toolCallCount`, `toolNames`, token usage); diagnostic for slow / tool-looping passes | `false` |
 | `RUSTY_LOG_RAW_FINDINGS` | when `true`, log each consensus pass's findings before clustering (file/line/severity/category/message); diagnostic for tuning Jaccard / line-proximity thresholds | `false` |
 | `RUSTY_LOG_RAW_FINDINGS_FILE` | with `RUSTY_LOG_RAW_FINDINGS=true`, also append the per-pass and cluster records (with each cluster's variants) to this path as NDJSON, regardless of `LOG_LEVEL`; write failures only warn | — |
 | `RUSTY_CONSENSUS_PASSES` | consensus pass count when the repo config does not set `consensusPasses` (integer 1-5; anything else warns and uses the default) | `3` |
@@ -271,7 +271,7 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 | `RUSTY_GENERATE_DESCRIPTION` | generate PR description when empty/placeholder | `false` |
 | `RUSTY_RENAME_TITLE_TO_CONVENTIONAL` | rewrite non-conventional PR titles into Conventional Commits format | `false` |
 | `RUSTY_FLAG_SCOPE_CREEP` | list changes that fall outside the PR's stated intent in a "Scope Creep" section of the summary comment | `false` |
-| `RUSTY_RISK_ASSESSMENT` | ask the review to rate the PR's risk (who is affected, how a defect would be noticed, whether a redeploy undoes it) and compare it with the author's `risk:` label; Azure DevOps only. Fallback for repos without a `risk` section in `.rusty-bot.json` | `false` |
+| `RUSTY_RISK_ASSESSMENT` | ask the review to rate the PR's risk (who is affected, how a defect would be noticed, whether a redeploy undoes it) and compare it with the author's `risk:` label. The label comparison needs a provider with label support (Azure DevOps today); other platforms get the assessment in the summary. Fallback for repos without a `risk` section in `.rusty-bot.json` | `false` |
 | `RUSTY_RISK_LABEL_PREFIX` | PR label prefix the author's level is read from (`risk:low`, `risk:medium`, `risk:high`) | `risk:` |
 | `RUSTY_RISK_REQUIRE_LABEL` | with risk assessment on, exit 1 when the PR carries no (or more than one) risk label | `true` |
 | `RUSTY_LLM_MAX_RETRIES` | application-level retries on transient LLM errors (max 2) | `2` |
@@ -524,7 +524,7 @@ Intent does not lower risk: a refactor in a risky area is as risky as a feature 
 
 | Key | Meaning | Default |
 |-----|---------|---------|
-| `risk.enabled` | ask the review for a risk assessment and compare it with the author's label (Azure DevOps) | `true` |
+| `risk.enabled` | ask the review for a risk assessment and compare it with the author's label (label support: Azure DevOps) | `true` |
 | `risk.labelPrefix` | PR label prefix the author's level is read from | `risk:` |
 | `risk.requireLabel` | fail the run when the PR carries no (or more than one) risk label | `true` |
 | `risk.reasons` | fixed vocabulary for reason tags; free-form when omitted | unset |
@@ -644,9 +644,9 @@ Three opt-in flags surface internal state for debugging slow consensus runs, tun
 **`RUSTY_LOG_AGENT_STEPS=true`** — one log line per agent step inside every `runReview` call:
 
 ```jsonc
-{ "stepNumber": 0, "finishReason": "tool-calls", "toolCallCount": 3, "totalTokens": 12450, ... }
-{ "stepNumber": 1, "finishReason": "tool-calls", "toolCallCount": 1, "totalTokens": 8200, ... }
-{ "stepNumber": 2, "finishReason": "stop", "toolCallCount": 0, "totalTokens": 6100, ... }
+{ "stepNumber": 0, "finishReason": "tool-calls", "toolCallCount": 3, "toolNames": ["searchCode", "searchCode", "getFileContext"], "totalTokens": 12450, ... }
+{ "stepNumber": 1, "finishReason": "tool-calls", "toolCallCount": 1, "toolNames": ["findSymbol"], "totalTokens": 8200, ... }
+{ "stepNumber": 2, "finishReason": "stop", "toolCallCount": 0, "toolNames": [], "totalTokens": 6100, ... }
 ```
 
 Useful when a pass takes minutes and you can't tell whether the model is making forward progress (decreasing tool calls, reasonable token counts per step) or spinning in a tool-call loop (constant or growing tool calls, no `"stop"` ever). Particularly diagnostic for the `finishReason: "tool-calls"` failure mode where a tool-happy model burns its step budget without emitting a final answer — the per-step trace tells you whether `RUSTY_LLM_MAX_STEPS` saved the day or got hit.
@@ -755,6 +755,7 @@ RUSTY_CONSENSUS_THRESHOLD=3
 |---------|-------------|---------|
 | `RUSTY_CONSENSUS_PASSES` | Number of independent review passes (1 = disabled) | `3` |
 | `RUSTY_CONSENSUS_THRESHOLD` | Minimum votes to keep a finding (unset = simple majority) | `ceil(passes/2)` |
+| `RUSTY_CONSENSUS_SINGLE_VOTE_ARBITRATION` | When `true`, the judge rules on findings below the threshold instead of them being dropped outright. Needs `RUSTY_JUDGE_ENABLED=true`. See [below-threshold arbitration](#below-threshold-arbitration) | `false` |
 
 **How it works:**
 
@@ -773,6 +774,15 @@ Consensus uses `Promise.allSettled` rather than `Promise.all`, so a single flaky
 - If fewer than `consensusThreshold` passes succeed, the review throws an `AggregateError` containing every pass failure.
 
 **Cost:** With the default 3 passes, LLM cost per review triples. Combine with the judge pass (using a cheaper model) to offset costs.
+
+#### Below-threshold arbitration
+
+Strict consensus loses real bugs that only one model catches: with two passes, the threshold requires both to report the same issue in similar words. With `RUSTY_CONSENSUS_SINGLE_VOTE_ARBITRATION=true` and the judge enabled, findings below the threshold go to the judge in a separate call with a stricter rubric. The judge decides on each finding's merits and also sees the findings already being published, so a reworded duplicate is rejected.
+
+- **Accepted** findings are published like any other, keep their real `voteCount`, and count towards the recommendation. That includes `RUSTY_FAIL_ON_CRITICAL`: a confirmed single-vote critical finding fails the job.
+- **Rejected** findings stay listed under "Filtered findings". If the recommendation was only elevated because of them, the elevation is cleared, since the judge has now evaluated them.
+- **Failure publishes nothing new.** If the arbitration call fails, or skips a finding, those findings are not published and the elevation stays, since they were never judged. Findings the judge did evaluate in the same call still count. This is deliberately the opposite of the main judge pass, which keeps findings when it fails: these findings have already lost the vote.
+- **Cost:** one extra judge call per review that has below-threshold findings. The call is logged as `judge pass complete` with `arbitration: true`; set `RUSTY_LOG_JUDGE_SCORES=true` to see each score.
 
 Set `consensusPasses` to `1` to disable consensus voting and get the original single-pass behavior with zero overhead.
 

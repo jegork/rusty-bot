@@ -380,6 +380,11 @@ export function formatSummaryComment(
     if (review.filteredCount !== undefined) {
       parts.push(`${review.filteredCount} low-confidence findings filtered`);
     }
+    if (review.arbitratedCount) {
+      parts.push(
+        `${review.arbitratedCount} below-threshold finding${review.arbitratedCount === 1 ? "" : "s"} confirmed by the judge`,
+      );
+    }
   }
   if (review.consensusMetadata) {
     const cm = review.consensusMetadata;

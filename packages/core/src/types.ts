@@ -116,6 +116,11 @@ export interface ReviewResult extends ReviewOutput {
   judgeStatus?: "ok" | "failed";
   consensusMetadata?: ConsensusMetadata;
   droppedFindings?: DroppedFinding[];
+  /** below-threshold findings awaiting the judge; consumed by judgeReviewResult.
+   * only set when RUSTY_CONSENSUS_SINGLE_VOTE_ARBITRATION is on */
+  arbitrationCandidates?: Finding[];
+  /** number of below-threshold findings the judge confirmed and published */
+  arbitratedCount?: number;
   openGrepStats?: OpenGrepStats;
   /** out-of-scope changes; only populated when `ReviewConfig.flagScopeCreep` is on */
   scopeCreep?: ScopeCreepItem[];
@@ -260,6 +265,10 @@ export interface GitProvider {
   getDiffSinceSha?(sinceSha: string, headSha: string): Promise<FilePatch[] | null>;
   /** read PR-wide context (summary + findings) embedded in a previously-posted summary comment, if any */
   getPriorReviewContext?(): Promise<PriorReviewContext | null>;
+  /** PR labels, for platforms that have them; the risk policy reads the author's level from these */
+  getLabels?(): Promise<string[]>;
+  /** post a bot-marked thread that is not the summary, e.g. a risk label disagreement */
+  postStandaloneComment?(markdown: string): Promise<void>;
 }
 
 export interface TicketProvider {

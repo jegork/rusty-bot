@@ -739,6 +739,19 @@ describe("formatSummaryComment with dropped findings", () => {
     expect(result).toContain("| `src/utils.ts` | 15 | suggestion |");
   });
 
+  it("credits findings the judge confirmed below the consensus threshold", () => {
+    expect(formatSummaryComment(makeReview({ arbitratedCount: 2 }))).toContain(
+      "2 below-threshold findings confirmed by the judge",
+    );
+    expect(formatSummaryComment(makeReview({ arbitratedCount: 1 }))).toContain(
+      "1 below-threshold finding confirmed by the judge",
+    );
+    expect(formatSummaryComment(makeReview({ arbitratedCount: 0 }))).not.toContain(
+      "confirmed by the judge",
+    );
+    expect(formatSummaryComment(makeReview())).not.toContain("confirmed by the judge");
+  });
+
   it("omits dropped findings section when droppedFindings is undefined", () => {
     const review = makeReview({ droppedFindings: undefined });
     const result = formatSummaryComment(review);

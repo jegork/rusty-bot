@@ -1,24 +1,18 @@
 #!/usr/bin/env node
 import {
   configureGlobalHttp,
-  expandContext,
   fetchConventionFile,
   filterAnchorableFindings,
   filterFiles,
   flushLogger,
   formatInlineComment,
   formatSummaryComment,
-  isCascadeEnabled,
   loadMcpServerConfigsFromEnv,
   logger,
-  runCascadeReview,
-  runMultiCallReview,
-  runTriage,
-  splitByClassification,
+  runTriagedReview,
   summarizeLanguages,
   type Finding,
   type ReviewConfig,
-  type ReviewResult,
 } from "@rusty-bot/core";
 import { LocalGitProvider } from "./local-provider.js";
 import { runAnalyzeFindings } from "./analyze-findings.js";
@@ -88,62 +82,21 @@ export async function run(args: CliArgs): Promise<number> {
   const mcpServers = await loadMcpServerConfigsFromEnv();
   const checkout = await provider.checkout();
 
-  let review: ReviewResult | undefined;
-
-  if (isCascadeEnabled()) {
-    log.info({ fileCount: reviewable.length }, "cascade enabled, running triage");
-
-    let triageResult;
-    try {
-      triageResult = await runTriage(reviewable);
-    } catch (err) {
-      log.warn({ err }, "triage failed, falling back to full review");
-    }
-
-    if (triageResult) {
-      const { skip, skim, deepReview } = splitByClassification(reviewable, triageResult.files);
-      log.info(
-        { skipped: skip.length, skimmed: skim.length, deepReview: deepReview.length },
-        "triage classification",
-      );
-
-      const expandedDeep = await expandContext(deepReview, (path) =>
-        provider.getFileContent(path, metadata.sourceBranch),
-      );
-
-      review = await runCascadeReview(skim, expandedDeep, reviewConfig, metadata, undefined, {
-        provider,
-        sourceRef: metadata.sourceBranch,
-        checkout,
-        languageSummary,
-        mcpServers,
-        maxTokens: MAX_TOKENS,
-      });
-
-      review.triageStats = {
-        filesSkipped: skip.length,
-        filesSkimmed: skim.length,
-        filesDeepReviewed: deepReview.length,
-        triageModelUsed: triageResult.modelUsed,
-        triageTokenCount: triageResult.tokenCount,
-      };
-    }
-  }
-
-  if (!review) {
-    const expanded = await expandContext(reviewable, (path) =>
-      provider.getFileContent(path, metadata.sourceBranch),
-    );
-
-    review = await runMultiCallReview(expanded, reviewConfig, metadata, undefined, {
+  const review = await runTriagedReview({
+    patches: reviewable,
+    config: reviewConfig,
+    metadata,
+    tickets: undefined,
+    fetchSourceFile: (path) => provider.getFileContent(path, metadata.sourceBranch),
+    options: {
       provider,
       sourceRef: metadata.sourceBranch,
       checkout,
       languageSummary,
       mcpServers,
       maxTokens: MAX_TOKENS,
-    });
-  }
+    },
+  });
 
   const criticalCount = review.findings.filter((f) => f.severity === "critical").length;
   log.info(

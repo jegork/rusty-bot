@@ -87,6 +87,10 @@ jobs:
           # scores 42, above haiku-5.5 at high (38) and gpt-6-luna at xhigh (34).
           RUSTY_JUDGE_MODEL: openrouter/z-ai/glm-5.3-flash
           RUSTY_JUDGE_TEMPERATURE: "0"
+          # measuring experiment 2 in CONSENSUS-QUALITY-WRITEUP.md: the judge rules on
+          # below-threshold findings, and every score is logged to calibrate it
+          RUSTY_CONSENSUS_SINGLE_VOTE_ARBITRATION: "true"
+          RUSTY_LOG_JUDGE_SCORES: "true"
           RUSTY_LLM_TRIAGE_MODEL: openrouter/anthropic/claude-haiku-5.5:low
           RUSTY_TRIAGE_TEMPERATURE: "0"
           RUSTY_REVIEW_STYLE: balanced

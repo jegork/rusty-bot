@@ -392,7 +392,8 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
       "No reviewable changes since the last review.",
       incremental.marker(current),
     );
-    return 0;
+    // the gate applies on every run; the old reminder was closed above with the other bot threads
+    return (await enforceRiskLabel(provider, risk, authorRisk)) ? 0 : 1;
   }
 
   if (platform.renameTitleToConventional) {

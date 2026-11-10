@@ -708,6 +708,22 @@ describe("runPrReview risk policy", () => {
     expect(provider.postStandaloneComment).not.toHaveBeenCalled();
   });
 
+  it("still enforces the label when the incremental delta has nothing reviewable", async () => {
+    const missing = riskProvider([]);
+    missing.getLastReviewedSha.mockResolvedValue("old");
+    missing.getDiffSinceSha.mockResolvedValue([]);
+    await expect(runPrReview(makePlatform(missing, { riskPolicy: envPolicy }))).resolves.toBe(1);
+    expect(mocks.runMultiCallReview).not.toHaveBeenCalled();
+    expect(missing.postSummaryComment.mock.calls[0][0]).toContain("No reviewable changes");
+    expect(missing.postStandaloneComment.mock.calls[0][0]).toContain("## Risk label required");
+
+    const labelled = riskProvider(["risk:low"]);
+    labelled.getLastReviewedSha.mockResolvedValue("old");
+    labelled.getDiffSinceSha.mockResolvedValue([]);
+    await expect(runPrReview(makePlatform(labelled, { riskPolicy: envPolicy }))).resolves.toBe(0);
+    expect(labelled.postStandaloneComment).not.toHaveBeenCalled();
+  });
+
   it("leaves other threads alone on the skip path when no policy is on", async () => {
     const provider = riskProvider([]);
     provider.getLastReviewedSha.mockResolvedValue(HEAD);

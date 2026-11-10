@@ -267,8 +267,12 @@ export interface GitProvider {
   getPriorReviewContext?(): Promise<PriorReviewContext | null>;
   /** PR labels, for platforms that have them; the risk policy reads the author's level from these */
   getLabels?(): Promise<string[]>;
-  /** post a bot-marked thread that is not the summary, e.g. a risk label disagreement */
-  postStandaloneComment?(markdown: string): Promise<void>;
+  /** post a bot-marked thread that is not the summary, e.g. a risk label disagreement; `tag` lets it be closed selectively */
+  postStandaloneComment?(markdown: string, options?: { tag?: string }): Promise<void>;
+  /** close the standalone threads posted with this tag, leaving the summary and the others alone */
+  closeStandaloneComments?(tag: string): Promise<void>;
+  /** like getFileContent, but null only when the file does not exist on the ref; any other failure throws */
+  readFile?(path: string, ref: string): Promise<string | null>;
 }
 
 export interface TicketProvider {

@@ -619,9 +619,11 @@ describe("runPrReview risk policy", () => {
           ? vi.fn().mockRejectedValue(labels)
           : vi.fn().mockResolvedValue(labels),
       postStandaloneComment: vi.fn().mockResolvedValue(undefined),
+      closeStandaloneComments: vi.fn().mockResolvedValue(undefined),
     }) as ReturnType<typeof makeProvider> & {
       getLabels: ReturnType<typeof vi.fn>;
       postStandaloneComment: ReturnType<typeof vi.fn>;
+      closeStandaloneComments: ReturnType<typeof vi.fn>;
     };
   }
 
@@ -651,6 +653,7 @@ describe("runPrReview risk policy", () => {
       "## Risk: High (author says Low)",
     );
     expect(provider.postStandaloneComment.mock.calls[0][0]).toContain("## Risk label disagreement");
+    expect(provider.postStandaloneComment.mock.calls[0][1]).toEqual({ tag: "risk-disagreement" });
   });
 
   it("does not argue when the author rates higher than the bot", async () => {
@@ -665,6 +668,7 @@ describe("runPrReview risk policy", () => {
     await expect(runPrReview(makePlatform(missing, { riskPolicy: envPolicy }))).resolves.toBe(1);
     expect(missing.postSummaryComment).toHaveBeenCalled();
     expect(missing.postStandaloneComment.mock.calls[0][0]).toContain("## Risk label required");
+    expect(missing.postStandaloneComment.mock.calls[0][1]).toEqual({ tag: "risk-label" });
 
     const doubled = riskProvider(["risk:low", "risk:high"]);
     await expect(runPrReview(makePlatform(doubled, { riskPolicy: envPolicy }))).resolves.toBe(1);
@@ -686,12 +690,58 @@ describe("runPrReview risk policy", () => {
     expect(mocks.runMultiCallReview.mock.calls.at(-1)?.[1].assessRisk).toBe(true);
   });
 
-  it("still enforces the label when the revision was already reviewed", async () => {
+  it("still enforces the label when the revision was already reviewed, without stacking reminders", async () => {
     const provider = riskProvider([]);
     provider.getLastReviewedSha.mockResolvedValue(HEAD);
     await expect(runPrReview(makePlatform(provider, { riskPolicy: envPolicy }))).resolves.toBe(1);
     expect(mocks.runMultiCallReview).not.toHaveBeenCalled();
+    expect(provider.closeStandaloneComments).toHaveBeenCalledWith("risk-label");
     expect(provider.postStandaloneComment.mock.calls[0][0]).toContain("## Risk label required");
+    expect(provider.deleteExistingBotComments).not.toHaveBeenCalled();
+  });
+
+  it("clears the reminder and passes when the label arrives on an already-reviewed revision", async () => {
+    const provider = riskProvider(["risk:low"]);
+    provider.getLastReviewedSha.mockResolvedValue(HEAD);
+    await expect(runPrReview(makePlatform(provider, { riskPolicy: envPolicy }))).resolves.toBe(0);
+    expect(provider.closeStandaloneComments).toHaveBeenCalledWith("risk-label");
+    expect(provider.postStandaloneComment).not.toHaveBeenCalled();
+  });
+
+  it("leaves other threads alone on the skip path when no policy is on", async () => {
+    const provider = riskProvider([]);
+    provider.getLastReviewedSha.mockResolvedValue(HEAD);
+    await expect(runPrReview(makePlatform(provider))).resolves.toBe(0);
+    expect(provider.closeStandaloneComments).not.toHaveBeenCalled();
+  });
+
+  it("reads the policy and rubric through the strict reader when the provider has one", async () => {
+    const provider = riskProvider(["risk:low"]);
+    const readFile = vi
+      .fn()
+      .mockImplementation(async (path: string) =>
+        path === ".rusty-bot.json" ? JSON.stringify({ risk: { promptFile: "r.md" } }) : "# rubric",
+      );
+    (provider as unknown as { readFile: typeof readFile }).readFile = readFile;
+    await runPrReview(makePlatform(provider));
+    expect(readFile).toHaveBeenCalledWith(".rusty-bot.json", METADATA.targetBranch);
+    expect(readFile).toHaveBeenCalledWith("r.md", METADATA.targetBranch);
+    expect(provider.getFileContent).not.toHaveBeenCalledWith(
+      ".rusty-bot.json",
+      METADATA.targetBranch,
+    );
+    expect(mocks.runMultiCallReview.mock.calls[0][1].riskPrompt).toBe("# rubric");
+  });
+
+  it("fails the run when the strict reader cannot read the policy", async () => {
+    const provider = riskProvider(["risk:low"]);
+    (provider as unknown as { readFile: unknown }).readFile = vi
+      .fn()
+      .mockRejectedValue(new Error("Azure DevOps API error 503"));
+    await expect(runPrReview(makePlatform(provider, { riskPolicy: envPolicy }))).rejects.toThrow(
+      "503",
+    );
+    expect(mocks.runMultiCallReview).not.toHaveBeenCalled();
   });
 
   it("keeps the prior pass's higher level on an incremental re-review", async () => {

@@ -36,6 +36,10 @@ function buildLastShaMarker(sha: string): string {
   return `<!-- rusty-bot:last-sha:${sha} -->`;
 }
 
+function buildStandaloneMarker(tag: string): string {
+  return `<!-- rusty-bot:standalone:${tag} -->`;
+}
+
 function buildLastIterationMarker(iterationId: string): string {
   return `<!-- rusty-bot:last-iteration:${iterationId} -->`;
 }
@@ -573,18 +577,58 @@ export class AzureDevOpsProvider implements GitProvider {
     return data.value.map((label) => label.name);
   }
 
-  /** post a bot-marked thread that is not the summary: it is closed by the next run like the others */
-  async postStandaloneComment(markdown: string): Promise<void> {
+  /** post a bot-marked thread that is not the summary: the next full run closes it like the others,
+   * and `closeStandaloneComments(tag)` closes just the ones posted with that tag */
+  async postStandaloneComment(markdown: string, options?: { tag?: string }): Promise<void> {
+    const header = options?.tag
+      ? `${BOT_MARKER}\n${buildStandaloneMarker(options.tag)}`
+      : BOT_MARKER;
     await this.fetchApi(
       `${this.baseUrl}/pullRequests/${this.pullRequestId}/threads?${API_VERSION}`,
       {
         method: "POST",
         body: JSON.stringify({
-          comments: [{ parentCommentId: 0, content: `${BOT_MARKER}\n${markdown}`, commentType: 1 }],
+          comments: [{ parentCommentId: 0, content: `${header}\n${markdown}`, commentType: 1 }],
           status: 1,
         }),
       },
     );
+  }
+
+  async closeStandaloneComments(tag: string): Promise<void> {
+    const marker = buildStandaloneMarker(tag);
+    const threads = await this.request(
+      `${this.baseUrl}/pullRequests/${this.pullRequestId}/threads?${API_VERSION}`,
+      AdoThreadsSchema,
+    );
+    const open = threads.value.filter(
+      (thread) =>
+        thread.status !== 4 &&
+        thread.status !== "closed" &&
+        thread.comments.some((c) => c.content?.includes(marker)),
+    );
+    for (const thread of open) {
+      await this.fetchApi(
+        `${this.baseUrl}/pullRequests/${this.pullRequestId}/threads/${thread.id}?${API_VERSION}`,
+        { method: "PATCH", body: JSON.stringify({ status: 4 }) },
+      );
+    }
+  }
+
+  /** null only for a file that does not exist on the ref; a failed request throws, unlike getFileContent */
+  async readFile(path: string, ref: string): Promise<string | null> {
+    const url =
+      `${this.baseUrl}/items?path=${encodeURIComponent(path)}` +
+      `&versionDescriptor.version=${encodeURIComponent(ref)}` +
+      `&versionDescriptor.versionType=branch&${API_VERSION}`;
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${this.accessToken}`, Accept: "text/plain" },
+    });
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new Error(`Azure DevOps API error ${response.status} reading ${path} on ${ref}`);
+    }
+    return await response.text();
   }
 
   async getLinkedWorkItemIds(): Promise<string[]> {

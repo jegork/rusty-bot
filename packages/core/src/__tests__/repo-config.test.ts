@@ -66,12 +66,12 @@ describe("fetchRepoConfig", () => {
     await expect(fetchRepoConfig(async () => null, "main")).resolves.toBeNull();
   });
 
-  it("returns null on a transport error instead of failing the run", async () => {
+  it("fails the run on a transport error rather than reviewing without the policy", async () => {
     await expect(
       fetchRepoConfig(async () => {
         throw new Error("503");
       }, "main"),
-    ).resolves.toBeNull();
+    ).rejects.toThrow("503");
   });
 
   it("throws when the file exists but is malformed", async () => {
@@ -99,7 +99,7 @@ describe("fetchRiskPrompt", () => {
     );
   });
 
-  it("falls back to the default on a transport error", async () => {
+  it("fails the run on a transport error rather than assessing against the default rubric", async () => {
     await expect(
       fetchRiskPrompt(
         async () => {
@@ -108,6 +108,6 @@ describe("fetchRiskPrompt", () => {
         "main",
         "risk.md",
       ),
-    ).resolves.toBeNull();
+    ).rejects.toThrow("503");
   });
 });

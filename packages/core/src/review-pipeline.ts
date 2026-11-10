@@ -174,10 +174,14 @@ async function enforceRiskLabel(
   if (!risk?.requireLabel || authorRisk === null || authorRisk.status === "ok") return true;
   await provider.postStandaloneComment?.(
     formatMissingRiskLabelComment(authorRisk, risk.labelPrefix),
+    { tag: RISK_LABEL_TAG },
   );
   log.warn({ status: authorRisk.status }, "PR has no usable risk label");
   return false;
 }
+
+const RISK_LABEL_TAG = "risk-label";
+const RISK_DISAGREEMENT_TAG = "risk-disagreement";
 
 /** the policy file is read from the target branch, so a PR cannot relax the gate that reviews it */
 async function resolveRiskPolicy(
@@ -186,15 +190,21 @@ async function resolveRiskPolicy(
   config: ReviewConfig,
 ): Promise<RiskPolicy | undefined> {
   const { provider } = platform;
-  const getFileContent = (path: string, ref: string) => provider.getFileContent(path, ref);
+  // the strict reader tells a missing file from a failed read, so a transient
+  // error fails the run instead of switching the policy off for that run
+  const getFileContent = (path: string, ref: string) =>
+    provider.readFile ? provider.readFile(path, ref) : provider.getFileContent(path, ref);
   const repoConfig = await fetchRepoConfig(getFileContent, metadata.targetBranch);
   const risk = repoConfig?.risk ?? platform.riskPolicy;
   if (!risk) return undefined;
   config.assessRisk = risk.enabled;
   config.riskReasons = risk.reasons;
   if (risk.enabled && risk.promptFile) {
-    const prompt = await fetchRiskPrompt(getFileContent, metadata.targetBranch, risk.promptFile);
-    if (prompt) config.riskPrompt = prompt;
+    config.riskPrompt = await fetchRiskPrompt(
+      getFileContent,
+      metadata.targetBranch,
+      risk.promptFile,
+    );
   }
   log.info(
     { source: repoConfig?.risk ? "repo config" : "env", enabled: risk.enabled },
@@ -346,7 +356,10 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
   if (lastReviewed && current && lastReviewed === current) {
     log.info({ revision: current }, "this revision was already reviewed, skipping review");
     // relabelling creates no revision, so a re-run lands here; the label still
-    // has to be checked or a missing-label failure would be sticky
+    // has to be checked or a missing-label failure would be sticky. the full
+    // path closes every bot thread, this one only the earlier label reminders,
+    // so a re-run never stacks them and a now-present label clears them
+    if (risk?.enabled) await provider.closeStandaloneComments?.(RISK_LABEL_TAG);
     return (await enforceRiskLabel(provider, risk, authorRisk)) ? 0 : 1;
   }
 
@@ -472,6 +485,7 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
   ) {
     await provider.postStandaloneComment?.(
       formatRiskDisagreementComment(authorRiskLevel, review.riskAssessment, risk.labelPrefix),
+      { tag: RISK_DISAGREEMENT_TAG },
     );
     log.info(
       { authorRiskLevel, botRiskLevel: review.riskAssessment.level },

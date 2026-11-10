@@ -47,21 +47,15 @@ export function parseRepoConfig(raw: string, source = REPO_CONFIG_FILENAME): Rep
 /**
  * Fetch the rubric named by `risk.promptFile` from the same ref as the config.
  * A file that is configured but absent throws, since reviewing with the default
- * prose would silently change the rubric the team signed off on; a transport
- * error falls back to the default with a warning, like the config itself.
+ * prose would silently change the rubric the team signed off on. A failed read
+ * also throws: the run fails rather than assessing against a different rubric.
  */
 export async function fetchRiskPrompt(
   getFileContent: FileContentFetcher,
   ref: string,
   path: string,
-): Promise<string | null> {
-  let content: string | null;
-  try {
-    content = await getFileContent(path, ref);
-  } catch (err) {
-    log.warn({ ref, path, err }, "failed to fetch risk prompt file, using the default rubric");
-    return null;
-  }
+): Promise<string> {
+  const content = await getFileContent(path, ref);
   if (content == null || content.trim() === "") {
     throw new Error(`${REPO_CONFIG_FILENAME}: risk.promptFile "${path}" not found on ${ref}`);
   }
@@ -72,21 +66,17 @@ export async function fetchRiskPrompt(
 /**
  * Fetch `.rusty-bot.json` from the repo root on the given ref. Read from the
  * target branch, like the convention file, so a PR cannot change the policy
- * that reviews it. A missing file or a transport error yields null (callers
- * fall back to their env settings); a file that exists but is malformed throws,
- * because a broken policy must be visible rather than quietly ignored.
+ * that reviews it. A missing file yields null and callers fall back to their
+ * env settings. A file that exists but is malformed throws, and so does a
+ * failed read, because a policy that silently stops applying is worse than a
+ * failed run. Providers whose file reader maps every failure to null (GitHub,
+ * GitLab) cannot tell the two apart; Azure DevOps exposes `readFile` for that.
  */
 export async function fetchRepoConfig(
   getFileContent: FileContentFetcher,
   ref: string,
 ): Promise<RepoConfig | null> {
-  let content: string | null;
-  try {
-    content = await getFileContent(REPO_CONFIG_FILENAME, ref);
-  } catch (err) {
-    log.warn({ ref, err }, "failed to fetch repo config, falling back to env settings");
-    return null;
-  }
+  const content = await getFileContent(REPO_CONFIG_FILENAME, ref);
   if (content == null) return null;
   const config = parseRepoConfig(content);
   log.info({ ref, sections: Object.keys(config) }, "loaded repo config");

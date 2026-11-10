@@ -18,7 +18,7 @@ Built on the [AI SDK](https://ai-sdk.dev) (TypeScript).
 - **Multi-provider LLM** — OpenAI, Anthropic, Google, OpenRouter, Requesty, Azure OpenAI / AI Foundry, Ollama, or any OpenAI-compatible endpoint
 - **PR description generation** — optionally generate a structured PR description from the diff when the description is empty or a placeholder (off by default)
 - **Scope creep detection** — optionally list changes in the diff that fall outside the PR's stated intent (title, description, linked tickets) in a dedicated summary section (off by default; enable with `RUSTY_FLAG_SCOPE_CREEP=true`)
-- **Risk assessment** — optionally rate each PR low, medium or high from three answers (who is affected if it is wrong, how it would be noticed, whether a redeploy undoes it). The level is derived in code from the answers, shown in the summary, and compared with the author's `risk:` label on Azure DevOps: a higher bot rating opens an active thread with the reasoning; a missing label fails the task (off by default; enable per repo in `.rusty-bot.json` or with `RUSTY_RISK_ASSESSMENT=true`)
+- **Risk assessment** — optionally rate each PR low, medium or high from three answers (who is affected if it is wrong, how it would be noticed, whether a redeploy undoes it). The level is derived in code from the answers, shown in the summary, and compared with the author's `risk:` label on Azure DevOps: a higher bot rating opens an active thread with the reasoning; a missing label fails the task (off until a repo adds a `risk` section to `.rusty-bot.json`, which enables assessment and label enforcement together, or the pipeline sets `RUSTY_RISK_ASSESSMENT=true`)
 - **Incremental review** — on subsequent pushes the bot reviews only the diff since the previously-reviewed state (commit on GitHub/GitLab, PR iteration on Azure DevOps) instead of the entire PR, cutting tokens on multi-commit PRs. The previous summary, recommendation, and surfaced findings are carried forward so the agent keeps PR-wide context without re-reading the full diff (on by default; opt out with `RUSTY_INCREMENTAL_REVIEW=false`)
 - **GitHub + GitLab + Azure DevOps + local CLI** — a drop-in GitHub Action, pipeline task for Azure DevOps, GitLab CI job, or a `rusty-bot` CLI that runs reviews against any local git repo
 
@@ -526,7 +526,7 @@ Intent does not lower risk: a refactor in a risky area is as risky as a feature 
 |-----|---------|---------|
 | `risk.enabled` | ask the review for a risk assessment and compare it with the author's label (label support: Azure DevOps) | `true` |
 | `risk.labelPrefix` | PR label prefix the author's level is read from | `risk:` |
-| `risk.requireLabel` | fail the run when the PR carries no (or more than one) risk label | `true` |
+| `risk.requireLabel` | fail the run when the PR carries no (or more than one) risk label. Note that any `risk` section turns the policy on with this default, even one that only sets `reasons` or `promptFile` | `true` |
 | `risk.reasons` | fixed vocabulary for reason tags; free-form when omitted | unset |
 | `risk.promptFile` | repo-relative markdown rubric replacing the bot's default prose; the answer contract is always appended | bot default |
 

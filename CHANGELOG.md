@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.22.0](https://github.com/jegork/rusty-bot/compare/v1.21.0...v1.22.0) (2026-11-10)
+
+
+### Features
+
+* assess PR risk against the author's label, with the policy in .rusty-bot.json ([#220](https://github.com/jegork/rusty-bot/issues/220)) ([eec76db](https://github.com/jegork/rusty-bot/commit/eec76db8d14fc99520782e49da6ff08975f3be69))
+* **core:** let the judge rule on below-threshold consensus findings ([#219](https://github.com/jegork/rusty-bot/issues/219)) ([327f249](https://github.com/jegork/rusty-bot/commit/327f249545174346c80f0db2d3e4980795a5f736))
+* **core:** log tool names per agent step ([#218](https://github.com/jegork/rusty-bot/issues/218)) ([db7a376](https://github.com/jegork/rusty-bot/commit/db7a376556c62a94c755ff1d920fc56b5877e5a1))
+
+
+### Refactor
+
+* run every CI handler through a shared review pipeline ([#222](https://github.com/jegork/rusty-bot/issues/222)) ([42bd9a9](https://github.com/jegork/rusty-bot/commit/42bd9a9eb4063f795d6a638c7d1ae2b7d25dd81e))
+
 ## [1.21.0](https://github.com/jegork/rusty-bot/compare/v1.20.0...v1.21.0) (2026-10-30)
 
 

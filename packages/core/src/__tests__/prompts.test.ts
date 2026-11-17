@@ -147,3 +147,55 @@ describe("repository risk rubric in the system prompt", () => {
     expect(prompt).not.toContain("Use only these reason tags");
   });
 });
+
+describe("repository skills section", () => {
+  const LISTING =
+    "## Available repository skills\n" +
+    "When the diff touches an area a skill covers, call loadSkill before reporting findings there.\n" +
+    "- migrations — Use `{{convention_instructions}}` and $& literally.";
+
+  it("is added to the deep-review prompt with the loadSkill tool line", () => {
+    const prompt = buildSystemPrompt(config, "deep-review", "remote", false, LISTING);
+
+    expect(prompt).toContain("**loadSkill**");
+    expect(prompt).toContain(LISTING);
+  });
+
+  it("inserts descriptions with backticks, template braces and $& literally", () => {
+    const prompt = buildSystemPrompt(config, "deep-review", "remote", false, LISTING);
+
+    expect(prompt).toContain("Use `{{convention_instructions}}` and $& literally.");
+  });
+
+  it("is never given to the skim tier", () => {
+    const skim = buildSystemPrompt(config, "skim", "remote", false, LISTING);
+
+    expect(skim).not.toContain("loadSkill");
+    expect(skim).not.toContain("Available repository skills");
+  });
+
+  it("leaves the prompt unchanged when there are no skills", () => {
+    expect(buildSystemPrompt(config, "deep-review", "remote", false, undefined)).toBe(
+      buildSystemPrompt(config, "deep-review", "remote", false),
+    );
+    expect(buildSystemPrompt(config, "deep-review", "remote")).not.toContain("loadSkill");
+  });
+});
+
+describe("placeholder substitution", () => {
+  it("never fills a placeholder that repo-supplied text happens to contain", () => {
+    const prompt = buildSystemPrompt(
+      {
+        ...config,
+        assessRisk: true,
+        riskPrompt: "Rubric mentions {{convention_instructions}} verbatim.",
+        conventionFile: "HOUSE RULES",
+      },
+      "deep-review",
+    );
+
+    expect(prompt).toContain("Rubric mentions {{convention_instructions}} verbatim.");
+    expect(prompt.match(/HOUSE RULES/g)).toHaveLength(1);
+    expect(prompt.indexOf("HOUSE RULES")).toBeGreaterThan(prompt.indexOf("Rubric mentions"));
+  });
+});

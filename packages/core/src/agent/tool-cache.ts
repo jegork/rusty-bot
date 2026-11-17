@@ -43,6 +43,7 @@ export class ToolCache {
   private fileCache = new Map<string, Promise<{ content: string | null }>>();
   private exploreCache = new Map<string, Promise<{ content: string | null }>>();
   private symbolCache = new Map<string, Promise<{ content: string | null }>>();
+  private skillCache = new Map<string, Promise<string | null>>();
   private searchUnavailableUntil = 0;
 
   readonly scope: SearchScope;
@@ -89,6 +90,15 @@ export class ToolCache {
     if (existing) return existing;
     const p = graph.explore(query).then((content) => ({ content }));
     this.exploreCache.set(query, p);
+    return p;
+  }
+
+  /** skill files come from the target branch, not this cache's source, so the caller supplies the read */
+  loadSkillFile(path: string, read: () => Promise<string | null>) {
+    const existing = this.skillCache.get(path);
+    if (existing) return existing;
+    const p = read();
+    this.skillCache.set(path, p);
     return p;
   }
 

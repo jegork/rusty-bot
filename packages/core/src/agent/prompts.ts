@@ -66,6 +66,9 @@ const CODE_GRAPH_TOOL_INSTRUCTIONS = `
 - **exploreCode**: show the source of the symbols most relevant to a query and how they call each other, from this PR's head commit.
 Prefer findSymbol / exploreCode over repeated searchCode calls when you need definitions or callers.`;
 
+const LOAD_SKILL_TOOL_INSTRUCTION = `
+- **loadSkill**: load one of the repository's review skills listed below, with the team's rules for that area.`;
+
 const SCOPE_CREEP_OUTPUT_REQUIREMENT =
   "- A scopeCreep list of changes that do not serve the PR's stated intent (see the scope creep rules below). Leave the array empty when every change is in scope.";
 
@@ -91,6 +94,7 @@ export function buildSystemPrompt(
   tier: ReviewTier = "deep-review",
   searchScope: SearchScope = "remote",
   codeGraphTools = false,
+  skillsListing?: string,
 ): string {
   const base = loadTemplate("base.txt");
   const styleInstructions = buildStyleInstructions(config.style);
@@ -109,31 +113,30 @@ export function buildSystemPrompt(
   ].join("\n");
   const scopeCreepInstructions = scopeCreep ? `\n${loadTemplate("scope-creep.txt")}` : "";
   const riskAssessmentInstructions = assessRisk ? buildRiskInstructions(config) : "";
-  const toolInstructions =
+  let toolInstructions =
     codeGraphTools && tier === "deep-review"
       ? tierSections.tool_instructions + CODE_GRAPH_TOOL_INSTRUCTIONS
       : tierSections.tool_instructions;
+  if (skillsListing && tier === "deep-review") {
+    toolInstructions += `${LOAD_SKILL_TOOL_INSTRUCTION}\n\n${skillsListing}`;
+  }
 
-  // replacer functions: a string replacement would expand $&, $1 etc. in substituted values
-  return (
-    base
-      .replace("{{tool_instructions}}", () => toolInstructions)
-      .replace("{{extended_output_requirements}}", () => extendedOutputRequirements)
-      .replace(
-        "{{unverified_reference_qualifier}}",
-        () => tierSections.unverified_reference_qualifier,
-      )
-      .replace("{{speculation_rule}}", () => tierSections.speculation_rule)
-      // a pr-head search sees the other changed files as they are in the PR, so there is nothing stale to warn about
-      .replace("{{other_files_tool_note}}", () =>
-        searchScope === "remote" ? tierSections.other_files_tool_note : "",
-      )
-      .replace("{{style_instructions}}", () => styleInstructions)
-      .replace("{{focus_instructions}}", () => focusInstructions)
-      .replace("{{scope_creep_instructions}}", () => scopeCreepInstructions)
-      .replace("{{risk_assessment_instructions}}", () => riskAssessmentInstructions)
-      .replace("{{convention_instructions}}", () => conventionInstructions)
-  );
+  const values: Record<string, string> = {
+    tool_instructions: toolInstructions,
+    extended_output_requirements: extendedOutputRequirements,
+    unverified_reference_qualifier: tierSections.unverified_reference_qualifier,
+    speculation_rule: tierSections.speculation_rule,
+    // a pr-head search sees the other changed files as they are in the PR, so there is nothing stale to warn about
+    other_files_tool_note: searchScope === "remote" ? tierSections.other_files_tool_note : "",
+    style_instructions: styleInstructions,
+    focus_instructions: focusInstructions,
+    scope_creep_instructions: scopeCreepInstructions,
+    risk_assessment_instructions: riskAssessmentInstructions,
+    convention_instructions: conventionInstructions,
+  };
+  // one pass with a replacer function: repo-supplied text (skills, rubric, convention
+  // file) is never rescanned for placeholders, and $&, $1 etc. are not expanded
+  return base.replace(/\{\{(\w+)\}\}/g, (match, key: string) => values[key] ?? match);
 }
 
 export interface CachedSystemMessage {

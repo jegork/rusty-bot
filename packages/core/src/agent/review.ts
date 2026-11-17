@@ -41,7 +41,9 @@ import {
   createGetFileContextTool,
   createExploreCodeTool,
   createFindSymbolTool,
+  createLoadSkillTool,
 } from "./tools.js";
+import type { SkillIndex } from "../skills.js";
 import { ToolCache, checkoutCodeSource, providerCodeSource } from "./tool-cache.js";
 import { logger } from "../logger.js";
 
@@ -513,6 +515,8 @@ export interface RunReviewOptions {
   checkout?: RepoCheckout;
   /** CodeGraph index of the PR head (RUSTY_CODEGRAPH); adds exploreCode and findSymbol to deep review. */
   codeGraph?: CodeGraphIndex;
+  /** repository skills found on the target branch; adds loadSkill and the skills listing to deep review. */
+  skills?: SkillIndex;
 }
 
 export function createToolCache(options: RunReviewOptions): ToolCache | undefined {
@@ -537,6 +541,9 @@ export function buildTools(options?: RunReviewOptions): ToolSet {
     tools.exploreCode = createExploreCodeTool(cache, options.codeGraph);
     tools.findSymbol = createFindSymbolTool(cache, options.codeGraph);
   }
+  if (options.skills && options.skills.skills.length > 0 && options.provider) {
+    tools.loadSkill = createLoadSkillTool(cache, options.provider, options.skills);
+  }
   return tools;
 }
 
@@ -555,7 +562,13 @@ export async function runReview(
   if (budgetMs <= 0) throw createReviewPassTimeoutError(budgetMs);
   const searchScope = options?.toolCache?.scope ?? (options?.checkout ? "pr-head" : "remote");
   const builtInTools = buildTools(options);
-  const systemPrompt = buildSystemPrompt(config, tier, searchScope, "findSymbol" in builtInTools);
+  const systemPrompt = buildSystemPrompt(
+    config,
+    tier,
+    searchScope,
+    "findSymbol" in builtInTools,
+    "loadSkill" in builtInTools ? options?.skills?.listing.text : undefined,
+  );
   const userMessage = buildUserMessage(
     diff,
     prMetadata,

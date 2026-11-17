@@ -1,6 +1,8 @@
 import { tool } from "ai";
 import { z } from "zod";
 import type { CodeGraphIndex } from "../repo/codegraph.js";
+import { parseSkillFile, type SkillIndex } from "../skills.js";
+import type { GitProvider } from "../types.js";
 import type { ToolCache } from "./tool-cache.js";
 import { SearchUnavailableError } from "./search-errors.js";
 
@@ -153,5 +155,65 @@ export function createFindSymbolTool(cache: ToolCache, graph: CodeGraphIndex) {
     }),
     outputSchema: codeGraphOutputSchema,
     execute: async ({ name }) => cache.findSymbol(graph, name),
+  });
+}
+
+function invalidSkillFile(file: string): string | null {
+  if (file === "") return "file must not be empty";
+  if (file.includes("\\")) return "file must use forward slashes";
+  if (file.startsWith("/") || /^[A-Za-z]:/.test(file)) return "file must be relative";
+  if (file.split("/").some((seg) => seg === "" || seg === "." || seg === "..")) {
+    return "file must be a normalised path inside the skill folder";
+  }
+  return null;
+}
+
+function skillError(error: string) {
+  return { content: null, truncated: false, totalChars: 0, error };
+}
+
+export function createLoadSkillTool(cache: ToolCache, provider: GitProvider, index: SkillIndex) {
+  return tool({
+    description:
+      "Load a repository review skill by name. The list of available skills and when to use " +
+      "each is in your instructions. Load a skill before judging code in the area it covers. " +
+      "Without file, returns the skill's instructions; with file, returns that file from the " +
+      `skill's folder when the instructions refer to one. Returns up to ${MAX_FILE_CONTEXT_CHARS} characters.`,
+    inputSchema: z.object({
+      name: z.string().describe("skill name exactly as listed"),
+      file: z
+        .string()
+        .optional()
+        .describe("relative path of a file inside the skill's folder, e.g. examples/good.sql"),
+    }),
+    outputSchema: z.object({
+      content: z.string().nullable(),
+      truncated: z.boolean(),
+      totalChars: z.number(),
+      error: z.string().optional(),
+    }),
+    execute: async ({ name, file }) => {
+      // the name is only ever an index key; paths come from discovery
+      const skill = index.skills.find((s) => s.name === name);
+      if (!skill) {
+        return skillError(
+          `unknown skill "${name}"; valid names: ${index.skills.map((s) => s.name).join(", ")}`,
+        );
+      }
+      if (file !== undefined) {
+        const invalid = invalidSkillFile(file);
+        if (invalid) return skillError(invalid);
+      }
+      const path = `${skill.dir}/${file ?? "SKILL.md"}`;
+      // the target branch, never the checkout: a PR must not rewrite the rules that review it
+      const content = await cache.loadSkillFile(path, () =>
+        provider.getFileContent(path, index.ref),
+      );
+      if (content !== null && file === undefined) {
+        const parsed = parseSkillFile(content);
+        return capFileContent({ content: "error" in parsed ? content : parsed.body });
+      }
+      return capFileContent({ content });
+    },
   });
 }

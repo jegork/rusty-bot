@@ -249,6 +249,11 @@ export interface CodeSearchResult {
   content: string;
 }
 
+export interface DirectoryEntry {
+  name: string;
+  type: "file" | "dir";
+}
+
 export interface GitProvider {
   getDiff(): Promise<FilePatch[]>;
   getPRMetadata(): Promise<PRMetadata>;
@@ -273,6 +278,10 @@ export interface GitProvider {
   closeStandaloneComments?(tag: string): Promise<void>;
   /** like getFileContent, but null only when the file does not exist on the ref; any other failure throws */
   readFile?(path: string, ref: string): Promise<string | null>;
+  /** immediate child entries of a directory at ref; null when the directory does not exist */
+  listDirectory?(path: string, ref: string): Promise<DirectoryEntry[] | null>;
+  /** why listDirectory is not offered, when a provider leaves it out on purpose */
+  readonly listDirectoryUnavailable?: string;
 }
 
 export interface TicketProvider {

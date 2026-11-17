@@ -35,6 +35,7 @@ export type {
   RiskLevel,
   RiskAxes,
   RiskAssessment,
+  DirectoryEntry,
 } from "./types.js";
 
 export {

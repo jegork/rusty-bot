@@ -93,3 +93,13 @@ export const AdoPrWorkItemsSchema = z.object({
     }),
   ),
 });
+
+export const AdoItemsSchema = z.object({
+  value: z.array(
+    z.object({
+      path: z.string(),
+      gitObjectType: z.string().optional(),
+      isFolder: z.boolean().optional(),
+    }),
+  ),
+});

@@ -4,6 +4,7 @@ import type {
   PRMetadata,
   Finding,
   CodeSearchResult,
+  DirectoryEntry,
   PostSummaryCommentOptions,
   PriorReviewContext,
 } from "@rusty-bot/core";
@@ -24,6 +25,7 @@ import {
   AdoThreadsSchema,
   AdoSearchResultSchema,
   AdoPrWorkItemsSchema,
+  AdoItemsSchema,
 } from "./schemas.js";
 
 const BOT_MARKER = "<!-- rusty-bot-review -->";
@@ -137,8 +139,9 @@ export class AzureDevOpsProvider implements GitProvider {
 
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      throw new Error(
-        `Azure DevOps API error ${response.status}: ${response.statusText} - ${body}`,
+      throw Object.assign(
+        new Error(`Azure DevOps API error ${response.status}: ${response.statusText} - ${body}`),
+        { status: response.status },
       );
     }
 
@@ -431,6 +434,31 @@ export class AzureDevOpsProvider implements GitProvider {
     } catch {
       return null;
     }
+  }
+
+  async listDirectory(path: string, ref: string): Promise<DirectoryEntry[] | null> {
+    const scopePath = "/" + path;
+    const url =
+      `${this.baseUrl}/items?scopePath=${encodeURIComponent(scopePath)}&recursionLevel=OneLevel` +
+      `&versionDescriptor.version=${encodeURIComponent(ref)}` +
+      `&versionDescriptor.versionType=branch&${API_VERSION}`;
+    let data;
+    try {
+      data = await this.request(url, AdoItemsSchema);
+    } catch (err) {
+      if ((err as { status?: unknown }).status === 404) return null;
+      throw err;
+    }
+    // the folder itself comes back as the first item; a file path returns only itself
+    const self = data.value.find((item) => item.path === scopePath);
+    if (!self?.isFolder) return null;
+    return data.value
+      .filter((item) => item !== self)
+      .filter((item) => item.gitObjectType === "tree" || item.gitObjectType === "blob")
+      .map((item): DirectoryEntry => ({
+        name: item.path.slice(item.path.lastIndexOf("/") + 1),
+        type: item.gitObjectType === "tree" ? "dir" : "file",
+      }));
   }
 
   async searchCode(query: string): Promise<CodeSearchResult[]> {

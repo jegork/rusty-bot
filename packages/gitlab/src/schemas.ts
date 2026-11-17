@@ -88,3 +88,10 @@ export const GitLabSearchResultSchema = z.array(
     data: z.string().optional(),
   }),
 );
+
+export const GitLabTreeSchema = z.array(
+  z.object({
+    name: z.string(),
+    type: z.string(),
+  }),
+);

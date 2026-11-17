@@ -17,6 +17,7 @@ Non-secret configuration lives in `RUSTY_*` env vars rather than action inputs, 
 | `RUSTY_FAIL_ON_CRITICAL` | `true` | Exit with code 1 when critical findings are produced |
 | `RUSTY_REVIEW_DRAFTS` | `false` | Review draft PRs (skipped by default) |
 | `RUSTY_INCREMENTAL_REVIEW` | `true` | Review only the diff since the previously-reviewed commit (GitHub Action) or PR iteration (Azure DevOps). Set to `false` to always review the full PR diff |
+| `RUSTY_SKILLS` | on | Set to `false` to skip [repository skill](/guides/repository-skills/) discovery regardless of `.rusty-bot.json` |
 
 ## LLM provider — Anthropic / OpenAI / Google
 

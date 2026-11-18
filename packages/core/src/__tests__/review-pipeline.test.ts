@@ -835,3 +835,86 @@ describe("runPrReview risk policy", () => {
     });
   });
 });
+
+describe("runPrReview repository skills", () => {
+  const SKILL_MD = "---\nname: migrations\ndescription: Use for migrations.\n---\nRules.\n";
+
+  function skillsProvider(files: Record<string, string>, folders: Record<string, string[]>) {
+    return makeProvider({
+      getFileContent: vi.fn(async (path: string, ref: string) =>
+        ref === METADATA.targetBranch ? (files[path] ?? null) : null,
+      ),
+      listDirectory: vi.fn(async (path: string, ref: string) =>
+        ref === METADATA.targetBranch && folders[path]
+          ? folders[path].map((name) => ({ name, type: "dir" as const }))
+          : null,
+      ),
+      getLabels: vi.fn().mockResolvedValue(["risk:low"]),
+      postStandaloneComment: vi.fn().mockResolvedValue(undefined),
+      closeStandaloneComments: vi.fn().mockResolvedValue(undefined),
+    }) as ReturnType<typeof makeProvider> & { listDirectory: ReturnType<typeof vi.fn> };
+  }
+
+  function configReads(provider: ReturnType<typeof makeProvider>) {
+    return provider.getFileContent.mock.calls.filter((c) => c[0] === ".rusty-bot.json");
+  }
+
+  it("fetches .rusty-bot.json once and feeds both the risk policy and skill discovery", async () => {
+    const provider = skillsProvider(
+      {
+        ".rusty-bot.json": JSON.stringify({
+          risk: { requireLabel: false },
+          skills: { paths: ["docs/skills"] },
+        }),
+        "docs/skills/migrations/SKILL.md": SKILL_MD,
+      },
+      { "docs/skills": ["migrations"] },
+    );
+
+    await runPrReview(makePlatform(provider));
+
+    expect(configReads(provider)).toHaveLength(1);
+    const [, config, , , options] = mocks.runMultiCallReview.mock.calls[0];
+    expect(config.assessRisk).toBe(true);
+    expect(provider.listDirectory.mock.calls).toEqual([["docs/skills", METADATA.targetBranch]]);
+    expect(options.skills.ref).toBe(METADATA.targetBranch);
+    expect(options.skills.skills).toEqual([
+      { name: "migrations", description: "Use for migrations.", dir: "docs/skills/migrations" },
+    ]);
+  });
+
+  it("runs discovery once per review on the default folders", async () => {
+    const provider = skillsProvider(
+      { ".skills/migrations/SKILL.md": SKILL_MD },
+      { ".skills": ["migrations"] },
+    );
+
+    await runPrReview(makePlatform(provider));
+
+    expect(provider.listDirectory.mock.calls.map((c) => c[0])).toEqual([
+      ".rusty-bot/skills",
+      ".skills",
+    ]);
+    expect(mocks.runMultiCallReview.mock.calls[0][4].skills.skills).toHaveLength(1);
+  });
+
+  it("passes no skills option when the repo has no skill folders", async () => {
+    const provider = skillsProvider({}, {});
+
+    await runPrReview(makePlatform(provider));
+
+    expect(mocks.runMultiCallReview.mock.calls[0][4]).not.toHaveProperty("skills");
+  });
+
+  it("does not run discovery when the revision was already reviewed", async () => {
+    const provider = skillsProvider(
+      { ".skills/migrations/SKILL.md": SKILL_MD },
+      { ".skills": ["migrations"] },
+    );
+    provider.getLastReviewedSha.mockResolvedValue(HEAD);
+
+    await runPrReview(makePlatform(provider));
+
+    expect(provider.listDirectory).not.toHaveBeenCalled();
+  });
+});

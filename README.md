@@ -161,7 +161,7 @@ rusty-bot-review:
     - node /app/packages/gitlab/dist/cli.js
 ```
 
-**Authentication:** Set `RUSTY_GITLAB_TOKEN` to a [project access token](https://docs.gitlab.com/ee/user/project/settings/project_access_tokens.html) with the `api` scope as a CI/CD variable (Settings → CI/CD → Variables). `CI_JOB_TOKEN` is read-only on most installs and cannot post MR notes or discussions.
+**Authentication:** Set `RUSTY_GITLAB_TOKEN` to a [project access token](https://docs.gitlab.com/ee/user/project/settings/project_access_tokens.html) with the `api` scope as a CI/CD variable (Settings → CI/CD → Variables). `CI_JOB_TOKEN` is read-only on most installs and cannot post MR notes or discussions. [Repository skills](#repository-skills) also need `RUSTY_GITLAB_TOKEN`: GitLab does not let a job token list repository folders (`repository/tree`), so with only `CI_JOB_TOKEN` skill discovery is skipped and the `skills` log event says so.
 
 **LLM key:** Set the matching key for your chosen provider as a CI/CD variable too (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, etc.).
 
@@ -209,6 +209,8 @@ The CLI reuses the same review engine, prompts, triage, MCP wiring, convention-f
 **Environment:**
 
 The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, the matching provider API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.), `RUSTY_LLM_TRIAGE_MODEL`, `RUSTY_CASCADE_ENABLED`, `RUSTY_JUDGE_*`, `RUSTY_OPENGREP_RULES`, MCP server configs, etc. See the [Configuration](#configuration) section for the full list.
+
+**Repo config and skills:** the CLI reads `.rusty-bot.json` and discovers [repository skills](#repository-skills) on the `--base` ref, the same way CI reads them from the target branch. A malformed `.rusty-bot.json` therefore fails a local run too, naming the file.
 
 **`searchCode` tool:** the CLI searches the commit `--head` resolves to with `git grep`, the same backend the CI handlers use on their checkout. PR-mutation methods (post comment, update title/description, etc.) are no-ops in the CLI since there is no PR to mutate.
 
@@ -267,6 +269,7 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 | `RUSTY_CASCADE_ENABLED` | explicitly enable/disable cascading (`true`/`false`) | auto (enabled when triage model is set) |
 | `RUSTY_OPENGREP_RULES` | OpenGrep config string (ruleset or path to rule file) | `auto` |
 | `RUSTY_CODEGRAPH` | experimental: when `true`, index the PR head with CodeGraph and give deep-review passes the `exploreCode` and `findSymbol` tools, see [CodeGraph Tools](#codegraph-tools-experimental) | `false` |
+| `RUSTY_SKILLS` | set to `false` to skip [repository skill](#repository-skills) discovery whatever `.rusty-bot.json` says | on |
 | `RUSTY_CODEGRAPH_INDEX_TIMEOUT_MS` | how long indexing may take before the review continues without the CodeGraph tools | `120000` |
 | `RUSTY_GENERATE_DESCRIPTION` | generate PR description when empty/placeholder | `false` |
 | `RUSTY_RENAME_TITLE_TO_CONVENTIONAL` | rewrite non-conventional PR titles into Conventional Commits format | `false` |
@@ -529,7 +532,39 @@ Intent does not lower risk: a refactor in a risky area is as risky as a feature 
 | `risk.requireLabel` | fail the run when the PR carries no (or more than one) risk label. Note that any `risk` section turns the policy on with this default, even one that only sets `reasons` or `promptFile` | `true` |
 | `risk.reasons` | fixed vocabulary for reason tags; free-form when omitted | unset |
 | `risk.promptFile` | repo-relative markdown rubric replacing the bot's default prose; the answer contract is always appended | bot default |
+| `skills.enabled` | discover [repository skills](#repository-skills) on the target branch | `true` |
+| `skills.paths` | repo-relative folders searched for skills, in order; setting it replaces the defaults. Entries must be relative, without `..` or backslashes | `[".rusty-bot/skills", ".skills"]` |
 
+
+### Repository skills
+
+A convention file is injected whole into every pass. Skills cover the detailed, area-specific rules a team has ("how we write migrations", "our auth invariants") without paying for them on every review: the prompt lists only each skill's name and description, and the deep-review agent loads the full text with the `loadSkill` tool when the diff touches that area.
+
+A skill is a folder holding a `SKILL.md` in the [Agent Skills](https://docs.claude.com/en/docs/agents-and-tools/agent-skills/overview) format Claude Code uses:
+
+```markdown
+---
+name: database-migrations
+description: Rules for SQL migrations — reversibility, locking, backfills. Use when the diff touches migrations/ or schema files.
+---
+# Migrations
+...
+```
+
+- `name`: lowercase letters, digits and single hyphens, at most 64 characters. `description`: at most 1024 characters, and it should say when to use the skill. Other frontmatter keys are ignored.
+- Other files in the folder are resources the body can point to by relative path; `loadSkill` reads them on request. Nothing in a skill is ever executed.
+- **Folders:** `.rusty-bot/skills/<skill>/SKILL.md` and `.skills/<skill>/SKILL.md` by default, one level deep. Change the list with `skills.paths` in [`.rusty-bot.json`](#repo-config-file); to share skills with Claude Code, add `.claude/skills`:
+
+  ```json
+  { "skills": { "paths": [".rusty-bot/skills", ".claude/skills"] } }
+  ```
+
+- **Target branch only:** skills are listed and read from the target branch through the platform API, never from the PR's checkout, so a PR cannot rewrite the rules that review it.
+- **Caps:** at most 40 skills; a duplicate name keeps the first folder's skill. Invalid skills (no frontmatter, bad name, missing or over-long description, empty body) are skipped with a warning and never fail the run. The listing in the prompt is held to 3,000 tokens: descriptions are shortened to their first sentence (at most 200 characters) when the full set does not fit, and skills past the budget are left out of the listing.
+- Only the deep-review tier sees skills; triage, skim, the judge, and the title and description generators do not. Turn discovery off with `"skills": { "enabled": false }` or `RUSTY_SKILLS=false`.
+- **GitLab:** listing folders needs `RUSTY_GITLAB_TOKEN`; with only `CI_JOB_TOKEN` discovery is skipped (see [GitLab CI Setup](#gitlab-ci-setup)).
+
+**Checking it worked:** each review logs one `skills` event (`module: "skills"`) with `outcome`, `discovered`, `skipped` (path and reason), `truncated`, `listing` (`full`, `shortened` or `truncated`), `listingTokens` and `omittedFromListing`. With `RUSTY_LOG_AGENT_STEPS=true`, a `loadSkill` entry in a step's `toolNames` shows the model actually loaded one.
 
 ### Convention Files
 

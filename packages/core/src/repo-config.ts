@@ -20,11 +20,37 @@ const RiskPolicySchema = z.strictObject({
   promptFile: z.string().min(1).optional(),
 });
 
+export const DEFAULT_SKILL_PATHS = [".rusty-bot/skills", ".skills"];
+
+const SkillPathSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (path) =>
+      !path.startsWith("/") &&
+      !/^[A-Za-z]:/.test(path) &&
+      !path.includes("\\") &&
+      !path.split("/").includes(".."),
+    { message: "must be a repo-relative path without .. or backslashes" },
+  );
+
+const SkillSettingsSchema = z.strictObject({
+  /** discover skills on the target branch; RUSTY_SKILLS=false turns it off regardless */
+  enabled: z.boolean().default(true),
+  /** repo-relative folders searched in order; replaces the defaults when set */
+  paths: z
+    .array(SkillPathSchema)
+    .min(1)
+    .default(() => [...DEFAULT_SKILL_PATHS]),
+});
+
 export const RepoConfigSchema = z.strictObject({
   risk: RiskPolicySchema.optional(),
+  skills: SkillSettingsSchema.optional(),
 });
 
 export type RiskPolicy = z.infer<typeof RiskPolicySchema>;
+export type SkillSettings = z.infer<typeof SkillSettingsSchema>;
 export type RepoConfig = z.infer<typeof RepoConfigSchema>;
 
 type FileContentFetcher = (path: string, ref: string) => Promise<string | null>;

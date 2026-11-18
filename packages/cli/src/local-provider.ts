@@ -7,6 +7,7 @@ import {
   parseDiff,
   RepoCheckout,
   type CodeSearchResult,
+  type DirectoryEntry,
   type FilePatch,
   type GitProvider,
   type PRMetadata,
@@ -111,6 +112,22 @@ export class LocalGitProvider implements GitProvider {
         ? await this.checkout()
         : new RepoCheckout({ repoPath: this.opts.repoPath, tree: ref, approximate: false });
     return checkout.readFile(path);
+  }
+
+  async listDirectory(path: string, ref: string): Promise<DirectoryEntry[] | null> {
+    // the trailing slash lists the folder's children; a file or missing path prints nothing
+    const out = await this.git(["ls-tree", "-z", ref, "--", `${path}/`]);
+    const entries = out
+      .split("\0")
+      .filter(Boolean)
+      .flatMap((line): DirectoryEntry[] => {
+        const [meta, fullPath] = line.split("\t");
+        const type = meta.split(" ")[1];
+        if (type !== "tree" && type !== "blob") return [];
+        const name = fullPath.slice(fullPath.lastIndexOf("/") + 1);
+        return [{ name, type: type === "tree" ? "dir" : "file" }];
+      });
+    return entries.length > 0 ? entries : null;
   }
 
   async searchCode(query: string): Promise<CodeSearchResult[]> {

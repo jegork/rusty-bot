@@ -10,6 +10,7 @@ import {
   MAX_SEARCH_FRAGMENT_CHARS,
   MAX_FILE_CONTEXT_CHARS,
 } from "../agent/tools.js";
+import type { SkillIndex } from "../skills.js";
 
 function makeResult(file: string, content: string) {
   return { file, line: 1, content };
@@ -291,5 +292,157 @@ describe("CodeGraph tools", () => {
     const tools = buildTools({ checkout, codeGraph: fakeGraph() });
 
     expect(await run(tools.findSymbol, { name: "missing" })).toEqual({ content: null });
+  });
+});
+
+describe("loadSkill tool", () => {
+  const SKILL_MD =
+    "---\nname: migrations\ndescription: Use for migrations.\n---\n# Migrations\nAlways reversible.\n";
+
+  function setup(files: Record<string, string> = {}) {
+    const checkout = { approximate: false, grep: vi.fn(), readFile: vi.fn() } as any;
+    const tree: Record<string, string> = {
+      ".skills/migrations/SKILL.md": SKILL_MD,
+      ".skills/migrations/examples/good.sql": "create table t (id int);",
+      ...files,
+    };
+    const provider = {
+      getFileContent: vi.fn(async (path: string, ref: string) =>
+        ref === "main" ? (tree[path] ?? null) : `wrong ref ${ref}`,
+      ),
+      searchCode: vi.fn(),
+    } as any;
+    const skills: SkillIndex = {
+      ref: "main",
+      skills: [
+        { name: "migrations", description: "Use for migrations.", dir: ".skills/migrations" },
+        { name: "auth", description: "Use for auth.", dir: ".skills/auth" },
+      ],
+      listing: {
+        text: "",
+        listing: "truncated",
+        listingTokens: 0,
+        omittedFromListing: ["auth"],
+      },
+    };
+    return { checkout, provider, skills };
+  }
+
+  function run(tool: unknown, input: object) {
+    return (tool as { execute: (i: object, o: object) => Promise<any> }).execute(input, {});
+  }
+
+  it("returns the SKILL.md body without frontmatter, read from the target ref", async () => {
+    const { checkout, provider, skills } = setup();
+    const tools = buildTools({ checkout, provider, sourceRef: "feature/x", skills });
+
+    const out = await run(tools.loadSkill, { name: "migrations" });
+
+    expect(out).toMatchObject({ content: "# Migrations\nAlways reversible.", truncated: false });
+    expect(provider.getFileContent).toHaveBeenCalledWith(".skills/migrations/SKILL.md", "main");
+    expect(checkout.readFile).not.toHaveBeenCalled();
+  });
+
+  it("reads a resource inside the skill folder from the target ref", async () => {
+    const { checkout, provider, skills } = setup();
+    const tools = buildTools({ checkout, provider, sourceRef: "feature/x", skills });
+
+    const out = await run(tools.loadSkill, { name: "migrations", file: "examples/good.sql" });
+
+    expect(out).toMatchObject({ content: "create table t (id int);" });
+    expect(provider.getFileContent).toHaveBeenCalledWith(
+      ".skills/migrations/examples/good.sql",
+      "main",
+    );
+  });
+
+  it("returns null content for a missing resource", async () => {
+    const { checkout, provider, skills } = setup();
+    const tools = buildTools({ checkout, provider, skills });
+
+    expect(await run(tools.loadSkill, { name: "migrations", file: "nope.md" })).toMatchObject({
+      content: null,
+    });
+  });
+
+  it("answers an unknown name with the valid names and no provider call", async () => {
+    const { checkout, provider, skills } = setup();
+    const tools = buildTools({ checkout, provider, skills });
+
+    const out = await run(tools.loadSkill, { name: "../../etc" });
+
+    expect(out.content).toBeNull();
+    expect(out.error).toContain("migrations");
+    expect(out.error).toContain("auth");
+    expect(provider.getFileContent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a parent segment", "../auth/SKILL.md"],
+    ["a nested parent segment", "examples/../../auth/SKILL.md"],
+    ["an absolute path", "/etc/passwd"],
+    ["a windows drive path", "C:/secrets"],
+    ["a backslash", "examples\\good.sql"],
+    ["an empty string", ""],
+    ["a dot segment", "./examples/good.sql"],
+    ["an empty segment", "examples//good.sql"],
+  ])("rejects a file with %s without calling the provider", async (_label, file) => {
+    const { checkout, provider, skills } = setup();
+    const tools = buildTools({ checkout, provider, skills });
+
+    const out = await run(tools.loadSkill, { name: "migrations", file });
+
+    expect(out.content).toBeNull();
+    expect(out.error).toEqual(expect.any(String));
+    expect(provider.getFileContent).not.toHaveBeenCalled();
+  });
+
+  it("truncates output over the cap with the getFileContext note", async () => {
+    const big = "x".repeat(MAX_FILE_CONTEXT_CHARS + 10);
+    const { checkout, provider, skills } = setup({ ".skills/migrations/big.md": big });
+    const tools = buildTools({ checkout, provider, skills });
+
+    const out = await run(tools.loadSkill, { name: "migrations", file: "big.md" });
+
+    expect(out.truncated).toBe(true);
+    expect(out.totalChars).toBe(MAX_FILE_CONTEXT_CHARS + 10);
+    expect(out.content).toContain("[file truncated, 10 more characters]");
+  });
+
+  it("serves repeated calls from the cache shared by every pass", async () => {
+    const { checkout, provider, skills } = setup();
+    const toolCache = createToolCache({ checkout, provider })!;
+
+    await run(buildTools({ checkout, provider, skills, toolCache }).loadSkill, {
+      name: "migrations",
+    });
+    await run(buildTools({ checkout, provider, skills, toolCache }).loadSkill, {
+      name: "migrations",
+    });
+    await run(buildTools({ checkout, provider, skills, toolCache }).loadSkill, {
+      name: "migrations",
+      file: "examples/good.sql",
+    });
+
+    expect(provider.getFileContent).toHaveBeenCalledTimes(2);
+  });
+
+  it("loads a skill that was left out of the prompt listing when the model names it", async () => {
+    const { checkout, provider, skills } = setup({
+      ".skills/auth/SKILL.md": "---\nname: auth\ndescription: x\n---\nAuth rules.\n",
+    });
+    const tools = buildTools({ checkout, provider, skills });
+
+    expect(await run(tools.loadSkill, { name: "auth" })).toMatchObject({ content: "Auth rules." });
+  });
+
+  it("is absent for the skim tier and when there are no skills", () => {
+    const { checkout, provider, skills } = setup();
+
+    expect(buildTools({ checkout, provider, skills, tier: "skim" })).toEqual({});
+    expect(buildTools({ checkout, provider })).not.toHaveProperty("loadSkill");
+    expect(
+      buildTools({ checkout, provider, skills: { ...skills, skills: [] } }),
+    ).not.toHaveProperty("loadSkill");
   });
 });

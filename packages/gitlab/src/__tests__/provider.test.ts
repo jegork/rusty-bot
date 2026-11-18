@@ -1,6 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { GitLabProvider } from "../provider.js";
+import type * as Core from "@rusty-bot/core";
 import type { Finding } from "@rusty-bot/core";
+
+const providerLog = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  debug: vi.fn(),
+  error: vi.fn(),
+}));
+vi.mock("@rusty-bot/core", async (importOriginal) => {
+  const core = await importOriginal<typeof Core>();
+  return { ...core, logger: { ...core.logger, child: () => providerLog } };
+});
+
+const { GitLabProvider } = await import("../provider.js");
 
 const API_BASE = "https://gitlab.example.com/api/v4";
 const PROJECT = "group/sub/project";
@@ -10,7 +23,7 @@ const TOKEN = "test-token";
 const PROJECT_ENC = encodeURIComponent(PROJECT);
 const MR_BASE = `${API_BASE}/projects/${PROJECT_ENC}/merge_requests/${MR_IID}`;
 
-function createProvider(): GitLabProvider {
+function createProvider(): InstanceType<typeof GitLabProvider> {
   return new GitLabProvider({
     apiBaseUrl: API_BASE,
     projectId: PROJECT,
@@ -42,7 +55,7 @@ function textResponse(body: string, ok = true): Response {
 }
 
 describe("GitLabProvider", () => {
-  let provider: GitLabProvider;
+  let provider: InstanceType<typeof GitLabProvider>;
   let fetchSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -422,6 +435,110 @@ describe("GitLabProvider", () => {
       fetchSpy.mockResolvedValueOnce(textResponse("nope", false));
       const content = await provider.getFileContent("missing.ts", "main");
       expect(content).toBeNull();
+    });
+  });
+
+  describe("listDirectory", () => {
+    function treeEntry(name: string, type: "tree" | "blob" | "commit") {
+      return {
+        id: "a1e8f8d745cc87e3a9248358d9352bb7f9a0aeba",
+        name,
+        type,
+        path: `.skills/${name}`,
+        mode: type === "tree" ? "040000" : "100644",
+      };
+    }
+
+    function treeResponse(body: unknown, nextPage = ""): Response {
+      const res = jsonResponse(body);
+      res.headers.set("x-next-page", nextPage);
+      return res;
+    }
+
+    it("returns child dirs and files of a folder on the given ref", async () => {
+      fetchSpy.mockResolvedValueOnce(
+        treeResponse([
+          treeEntry("migrations", "tree"),
+          treeEntry("README.md", "blob"),
+          treeEntry("vendored", "commit"),
+        ]),
+      );
+
+      expect(await provider.listDirectory?.(".skills", "feature/x")).toEqual([
+        { name: "migrations", type: "dir" },
+        { name: "README.md", type: "file" },
+      ]);
+      const url = fetchSpy.mock.calls[0]?.[0] as string;
+      expect(url).toBe(
+        `${API_BASE}/projects/${PROJECT_ENC}/repository/tree?path=.skills&ref=feature%2Fx&per_page=100`,
+      );
+    });
+
+    it("returns null for a 404 Tree Not Found", async () => {
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ message: "404 Tree Not Found" }, false, 404));
+
+      expect(await provider.listDirectory?.(".skills", "main")).toBeNull();
+    });
+
+    it("returns null for an empty tree, which is what a file path or a missing path can give", async () => {
+      fetchSpy.mockResolvedValueOnce(treeResponse([]));
+
+      expect(await provider.listDirectory?.(".skills/SKILL.md", "main")).toBeNull();
+    });
+
+    it("throws on a 500 and the error carries the numeric status", async () => {
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ message: "boom" }, false, 500));
+
+      const err = await provider.listDirectory?.(".skills", "main").catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(Error);
+      expect(err).toMatchObject({ status: 500 });
+      expect((err as Error).message).toContain("GitLab API error 500");
+    });
+
+    it("throws on a network error", async () => {
+      fetchSpy.mockRejectedValueOnce(new TypeError("fetch failed"));
+
+      await expect(provider.listDirectory?.(".skills", "main")).rejects.toThrow("fetch failed");
+    });
+
+    it("caps at the first 100 entries and warns when there are more pages", async () => {
+      const entries = Array.from({ length: 100 }, (_, i) => treeEntry(`skill-${i}`, "tree"));
+      fetchSpy.mockResolvedValueOnce(treeResponse(entries, "2"));
+
+      const result = await provider.listDirectory?.(".skills", "main");
+
+      expect(result).toHaveLength(100);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(providerLog.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ path: ".skills", ref: "main", shown: 100 }),
+        expect.stringContaining("100"),
+      );
+    });
+
+    it("is not offered with a CI job token, which cannot call repository/tree", async () => {
+      const jobTokenProvider = new GitLabProvider({
+        apiBaseUrl: API_BASE,
+        projectId: PROJECT,
+        mergeRequestIid: MR_IID,
+        token: TOKEN,
+        isJobToken: true,
+      });
+
+      expect(jobTokenProvider.listDirectory).toBeUndefined();
+      expect(jobTokenProvider.listDirectoryUnavailable).toBe(
+        "job token cannot list folders; set RUSTY_GITLAB_TOKEN",
+      );
+      expect(provider.listDirectoryUnavailable).toBeUndefined();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("fetchApi errors", () => {
+    it("carry the numeric status on the thrown error", async () => {
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ message: "nope" }, false, 403));
+
+      await expect(provider.getPRMetadata()).rejects.toMatchObject({ status: 403 });
     });
   });
 

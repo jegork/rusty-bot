@@ -6,6 +6,7 @@ import type {
   Finding,
   Hunk,
   CodeSearchResult,
+  DirectoryEntry,
   PostSummaryCommentOptions,
   PriorReviewContext,
 } from "@rusty-bot/core";
@@ -326,6 +327,26 @@ export class GitHubProvider implements GitProvider {
     } catch {
       return null;
     }
+  }
+
+  async listDirectory(path: string, ref: string): Promise<DirectoryEntry[] | null> {
+    let data: unknown;
+    try {
+      ({ data } = await this.octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+        owner: this.owner,
+        repo: this.repo,
+        path,
+        ref,
+      }));
+    } catch (err) {
+      if ((err as { status?: unknown }).status === 404) return null;
+      throw err;
+    }
+    // the contents API answers a file path with a single object, not an array
+    if (!Array.isArray(data)) return null;
+    return (data as { name: string; type: string }[])
+      .filter((e) => e.type === "dir" || e.type === "file")
+      .map((e) => ({ name: e.name, type: e.type as DirectoryEntry["type"] }));
   }
 
   async searchCode(query: string): Promise<CodeSearchResult[]> {

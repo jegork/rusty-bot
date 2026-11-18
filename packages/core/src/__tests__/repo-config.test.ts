@@ -6,6 +6,42 @@ import {
   REPO_CONFIG_FILENAME,
 } from "../repo-config.js";
 
+describe("parseRepoConfig skills section", () => {
+  it("fills the defaults for an empty skills section", () => {
+    expect(parseRepoConfig('{"skills": {}}')).toEqual({
+      skills: { enabled: true, paths: [".rusty-bot/skills", ".skills"] },
+    });
+  });
+
+  it("keeps the configured paths in order, replacing the defaults", () => {
+    const config = parseRepoConfig('{"skills": {"paths": [".claude/skills", "docs/skills"]}}');
+    expect(config.skills?.paths).toEqual([".claude/skills", "docs/skills"]);
+  });
+
+  it.each([
+    ["an absolute path", "/etc/skills"],
+    ["a windows drive path", "C:/skills"],
+    ["a parent segment", "../shared/skills"],
+    ["a parent segment in the middle", "docs/../../skills"],
+    ["an empty string", ""],
+    ["a backslash", "docs\\skills"],
+  ])("rejects %s in skills.paths", (_label, path) => {
+    expect(() => parseRepoConfig(JSON.stringify({ skills: { paths: [path] } }))).toThrow(
+      /skills\.paths/,
+    );
+  });
+
+  it("rejects an empty paths array", () => {
+    expect(() => parseRepoConfig('{"skills": {"paths": []}}')).toThrow(/skills\.paths/);
+  });
+
+  it("rejects unknown keys inside skills", () => {
+    expect(() => parseRepoConfig('{"skills": {"folders": [".skills"]}}')).toThrow(
+      /invalid repo config/,
+    );
+  });
+});
+
 describe("parseRepoConfig", () => {
   it("fills the risk defaults for a minimal section", () => {
     expect(parseRepoConfig('{"risk": {}}')).toEqual({

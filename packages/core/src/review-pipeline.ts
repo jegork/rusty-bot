@@ -15,7 +15,13 @@ import { logger } from "./logger.js";
 import { loadMcpServerConfigsFromEnv } from "./mcp/client.js";
 import { extractChangedFilePaths, runOpenGrep } from "./opengrep/runner.js";
 import { resolveRepoCheckout } from "./repo/resolve.js";
-import { fetchRepoConfig, fetchRiskPrompt, type RiskPolicy } from "./repo-config.js";
+import {
+  fetchRepoConfig,
+  fetchRiskPrompt,
+  type RepoConfig,
+  type RiskPolicy,
+} from "./repo-config.js";
+import { discoverSkills } from "./skills.js";
 import { extractTicketRefs } from "./tickets/extract.js";
 import { resolveTicketsWithStatus } from "./tickets/resolve.js";
 import { generateConventionalTitle } from "./title/generate.js";
@@ -183,18 +189,21 @@ async function enforceRiskLabel(
 const RISK_LABEL_TAG = "risk-label";
 const RISK_DISAGREEMENT_TAG = "risk-disagreement";
 
+// the strict reader tells a missing file from a failed read, so a transient
+// error fails the run instead of switching a policy off for that run
+function strictReader(provider: GitProvider) {
+  return (path: string, ref: string) =>
+    provider.readFile ? provider.readFile(path, ref) : provider.getFileContent(path, ref);
+}
+
 /** the policy file is read from the target branch, so a PR cannot relax the gate that reviews it */
 async function resolveRiskPolicy(
   platform: ReviewPlatform,
   metadata: PRMetadata,
   config: ReviewConfig,
+  repoConfig: RepoConfig | null,
 ): Promise<RiskPolicy | undefined> {
-  const { provider } = platform;
-  // the strict reader tells a missing file from a failed read, so a transient
-  // error fails the run instead of switching the policy off for that run
-  const getFileContent = (path: string, ref: string) =>
-    provider.readFile ? provider.readFile(path, ref) : provider.getFileContent(path, ref);
-  const repoConfig = await fetchRepoConfig(getFileContent, metadata.targetBranch);
+  const getFileContent = strictReader(platform.provider);
   const risk = repoConfig?.risk ?? platform.riskPolicy;
   if (!risk) return undefined;
   config.assessRisk = risk.enabled;
@@ -336,7 +345,8 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
     ...platform.config,
     ...(conventionFile && { conventionFile }),
   };
-  const risk = await resolveRiskPolicy(platform, metadata, config);
+  const repoConfig = await fetchRepoConfig(strictReader(provider), metadata.targetBranch);
+  const risk = await resolveRiskPolicy(platform, metadata, config, repoConfig);
   const authorRisk = await readAuthorRiskLabel(provider, risk);
 
   // read the marker and prior context before deleting old bot comments, which hold them
@@ -421,6 +431,8 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
     log.info({ findingCount: openGrepResult.findings.length }, "opengrep pre-scan complete");
   }
 
+  const skills = await discoverSkills(provider, metadata.targetBranch, repoConfig?.skills);
+
   const review = await runTriagedReview({
     patches: reviewable,
     config,
@@ -428,6 +440,7 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
     tickets: tickets.length > 0 ? tickets : undefined,
     fetchSourceFile,
     options: {
+      ...(skills && { skills }),
       provider,
       sourceRef: metadata.sourceBranch,
       checkout: checkout ?? undefined,

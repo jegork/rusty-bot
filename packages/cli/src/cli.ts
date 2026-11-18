@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import {
   configureGlobalHttp,
+  discoverSkills,
   fetchConventionFile,
+  fetchRepoConfig,
   filterAnchorableFindings,
   filterFiles,
   flushLogger,
@@ -62,6 +64,11 @@ export async function run(args: CliArgs): Promise<number> {
   if (conventionFile) {
     reviewConfig.conventionFile = conventionFile;
   }
+  // like CI, a malformed file fails the run rather than silently dropping its settings
+  const repoConfig = await fetchRepoConfig(
+    (path, ref) => provider.getFileContent(path, ref),
+    metadata.targetBranch,
+  );
 
   const rawPatches = await provider.getDiff();
   if (rawPatches.length === 0) {
@@ -81,6 +88,7 @@ export async function run(args: CliArgs): Promise<number> {
   const languageSummary = summarizeLanguages(reviewable);
   const mcpServers = await loadMcpServerConfigsFromEnv();
   const checkout = await provider.checkout();
+  const skills = await discoverSkills(provider, metadata.targetBranch, repoConfig?.skills);
 
   const review = await runTriagedReview({
     patches: reviewable,
@@ -89,6 +97,7 @@ export async function run(args: CliArgs): Promise<number> {
     tickets: undefined,
     fetchSourceFile: (path) => provider.getFileContent(path, metadata.sourceBranch),
     options: {
+      ...(skills && { skills }),
       provider,
       sourceRef: metadata.sourceBranch,
       checkout,

@@ -5,6 +5,7 @@ import type {
   Finding,
   Hunk,
   CodeSearchResult,
+  DirectoryEntry,
   PostSummaryCommentOptions,
   PriorReviewContext,
 } from "@rusty-bot/core";
@@ -24,12 +25,15 @@ import {
   GitLabDiscussionsSchema,
   GitLabClosesIssuesSchema,
   GitLabSearchResultSchema,
+  GitLabTreeSchema,
 } from "./schemas.js";
 
 const BOT_MARKER = "<!-- rusty-bot-review -->";
 const LAST_SHA_MARKER_RE = /<!--\s*rusty-bot:last-sha:([0-9a-f]{7,64})\s*-->/i;
 
 const log = logger.child({ package: "gitlab", component: "provider" });
+
+const TREE_PAGE_SIZE = 100;
 
 function buildLastShaMarker(sha: string): string {
   return `<!-- rusty-bot:last-sha:${sha} -->`;
@@ -115,6 +119,10 @@ export class GitLabProvider implements GitProvider {
   private readonly tokenHeader: string;
   /** populated by getDiff/getPRMetadata for use by postInlineComments */
   private cachedDiffRefs: { base_sha: string; start_sha: string; head_sha: string } | null = null;
+  // CI_JOB_TOKEN may read raw files but not call repository/tree, so a job
+  // token provider leaves listDirectory out instead of failing every listing
+  readonly listDirectory?: (path: string, ref: string) => Promise<DirectoryEntry[] | null>;
+  readonly listDirectoryUnavailable?: string;
 
   constructor(config: GitLabProviderConfig) {
     this.apiBaseUrl = config.apiBaseUrl.replace(/\/$/, "");
@@ -123,6 +131,11 @@ export class GitLabProvider implements GitProvider {
     this.mergeRequestIid = config.mergeRequestIid;
     this.token = config.token;
     this.tokenHeader = config.isJobToken ? "JOB-TOKEN" : "PRIVATE-TOKEN";
+    if (config.isJobToken) {
+      this.listDirectoryUnavailable = "job token cannot list folders; set RUSTY_GITLAB_TOKEN";
+    } else {
+      this.listDirectory = (path, ref) => this.listTree(path, ref);
+    }
   }
 
   private get mrBase(): string {
@@ -150,7 +163,10 @@ export class GitLabProvider implements GitProvider {
     const res = await fetch(url, { ...rest, headers });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      throw new Error(`GitLab API error ${res.status}: ${res.statusText} - ${body}`);
+      throw Object.assign(
+        new Error(`GitLab API error ${res.status}: ${res.statusText} - ${body}`),
+        { status: res.status },
+      );
     }
     return res;
   }
@@ -281,6 +297,31 @@ export class GitLabProvider implements GitProvider {
     } catch {
       return null;
     }
+  }
+
+  private async listTree(path: string, ref: string): Promise<DirectoryEntry[] | null> {
+    const url =
+      `${this.projectBase}/repository/tree?path=${encodeURIComponent(path)}` +
+      `&ref=${encodeURIComponent(ref)}&per_page=${TREE_PAGE_SIZE}`;
+    let res: Response;
+    try {
+      res = await this.fetchApi(url);
+    } catch (err) {
+      if ((err as { status?: unknown }).status === 404) return null;
+      throw err;
+    }
+    const entries = GitLabTreeSchema.parse(await res.json());
+    // a missing path or a file path can answer with an empty tree instead of a 404
+    if (entries.length === 0) return null;
+    if (res.headers.get("x-next-page")) {
+      log.warn(
+        { path, ref, shown: entries.length },
+        `folder has more than ${TREE_PAGE_SIZE} entries; only the first ${TREE_PAGE_SIZE} are listed`,
+      );
+    }
+    return entries
+      .filter((e) => e.type === "tree" || e.type === "blob")
+      .map((e): DirectoryEntry => ({ name: e.name, type: e.type === "tree" ? "dir" : "file" }));
   }
 
   async searchCode(query: string): Promise<CodeSearchResult[]> {

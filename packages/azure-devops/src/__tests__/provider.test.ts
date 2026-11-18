@@ -57,6 +57,90 @@ describe("AzureDevOpsProvider", () => {
     vi.restoreAllMocks();
   });
 
+  describe("listDirectory", () => {
+    function item(path: string, gitObjectType: "tree" | "blob" | "commit") {
+      return {
+        objectId: "61780798228d17af2d34fce4cfbdf35556832472",
+        gitObjectType,
+        commitId: "3be22be77da4887e869c981806d8452f034dd014",
+        path,
+        ...(gitObjectType === "tree" ? { isFolder: true } : {}),
+        url: `${BASE_URL}/items?path=${encodeURIComponent(path)}&versionType=Branch&version=main`,
+      };
+    }
+
+    it("returns child dirs and files and drops the folder's own entry", async () => {
+      fetchSpy.mockResolvedValueOnce(
+        mockFetchResponse({
+          count: 4,
+          value: [
+            item("/.skills", "tree"),
+            item("/.skills/migrations", "tree"),
+            item("/.skills/README.md", "blob"),
+            item("/.skills/vendored", "commit"),
+          ],
+        }),
+      );
+
+      expect(await provider.listDirectory(".skills", "main")).toEqual([
+        { name: "migrations", type: "dir" },
+        { name: "README.md", type: "file" },
+      ]);
+      const url = fetchSpy.mock.calls[0]?.[0] as string;
+      expect(url).toBe(
+        `${BASE_URL}/items?scopePath=${encodeURIComponent("/.skills")}&recursionLevel=OneLevel` +
+          `&versionDescriptor.version=main&versionDescriptor.versionType=branch&${API_VERSION}`,
+      );
+    });
+
+    it("returns null for a 404 on a missing folder", async () => {
+      fetchSpy.mockResolvedValueOnce(
+        mockFetchResponse(
+          {
+            message: "TF401174: The item '.skills' could not be found in the repository.",
+            typeKey: "GitItemNotFoundException",
+          },
+          false,
+          404,
+        ),
+      );
+
+      expect(await provider.listDirectory(".skills", "main")).toBeNull();
+    });
+
+    it("returns null when the path is a file, not a folder", async () => {
+      fetchSpy.mockResolvedValueOnce(
+        mockFetchResponse({ count: 1, value: [item("/.skills/SKILL.md", "blob")] }),
+      );
+
+      expect(await provider.listDirectory(".skills/SKILL.md", "main")).toBeNull();
+    });
+
+    it("throws on a 500 and the error carries the numeric status", async () => {
+      fetchSpy.mockResolvedValueOnce(mockFetchResponse({ message: "boom" }, false, 500));
+
+      const err = await provider.listDirectory(".skills", "main").catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(Error);
+      expect(err).toMatchObject({ status: 500 });
+      expect((err as Error).message).toContain("Azure DevOps API error 500");
+    });
+
+    it("throws on a network error", async () => {
+      fetchSpy.mockRejectedValueOnce(new TypeError("fetch failed"));
+
+      await expect(provider.listDirectory(".skills", "main")).rejects.toThrow("fetch failed");
+    });
+  });
+
+  describe("fetchApi errors", () => {
+    it("carry the numeric status on the thrown error", async () => {
+      fetchSpy.mockResolvedValueOnce(mockFetchResponse({ message: "nope" }, false, 401));
+
+      await expect(provider.getPRMetadata()).rejects.toMatchObject({ status: 401 });
+    });
+  });
+
   describe("getPRMetadata", () => {
     it("maps ado response to PRMetadata", async () => {
       fetchSpy.mockResolvedValueOnce(

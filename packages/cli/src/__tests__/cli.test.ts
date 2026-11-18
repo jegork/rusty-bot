@@ -23,6 +23,12 @@ const deletionOnly: FilePatch = {
 };
 
 const fakeCheckout = vi.hoisted(() => ({ tree: "abc", approximate: false }));
+// files and folders on the base ref; the head ref has none, so a read from it shows up as missing
+const baseTree = vi.hoisted(() => {
+  const files: Record<string, string> = {};
+  const dirs: Record<string, string[]> = {};
+  return { files, dirs };
+});
 
 vi.mock("../local-provider.js", () => ({
   LocalGitProvider: vi.fn(function () {
@@ -36,7 +42,14 @@ vi.mock("../local-provider.js", () => ({
         headSha: "abc",
       }),
       getDiff: vi.fn().mockResolvedValue([deletionOnly]),
-      getFileContent: vi.fn().mockResolvedValue(null),
+      getFileContent: vi.fn(async (path: string, ref: string) =>
+        ref === "base" ? (baseTree.files[path] ?? null) : null,
+      ),
+      listDirectory: vi.fn(async (path: string, ref: string) =>
+        ref === "base" && baseTree.dirs[path]
+          ? baseTree.dirs[path].map((name) => ({ name, type: "dir" }))
+          : null,
+      ),
       checkout: vi.fn().mockResolvedValue(fakeCheckout),
     };
   }),
@@ -71,6 +84,9 @@ const args: CliArgs = {
 
 describe("run", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
+    baseTree.files = {};
+    baseTree.dirs = {};
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   });
 
@@ -87,5 +103,33 @@ describe("run", () => {
     await run(args);
 
     expect(vi.mocked(runTriagedReview).mock.calls[0]?.[0].options.checkout).toBe(fakeCheckout);
+  });
+
+  it("passes skills from the base ref, in the folders .rusty-bot.json names, into the review", async () => {
+    baseTree.files = {
+      ".rusty-bot.json": JSON.stringify({ skills: { paths: ["docs/skills"] } }),
+      "docs/skills/migrations/SKILL.md":
+        "---\nname: migrations\ndescription: Use for migrations.\n---\nRules.\n",
+    };
+    baseTree.dirs = { "docs/skills": ["migrations"] };
+
+    await run(args);
+
+    const options = vi.mocked(runTriagedReview).mock.calls[0]?.[0].options;
+    expect(options?.skills?.ref).toBe("base");
+    expect(options?.skills?.skills.map((s) => s.name)).toEqual(["migrations"]);
+  });
+
+  it("passes no skills when the base ref has none", async () => {
+    await run(args);
+
+    expect(vi.mocked(runTriagedReview).mock.calls[0]?.[0].options).not.toHaveProperty("skills");
+  });
+
+  it("fails the run on a malformed .rusty-bot.json, naming the file", async () => {
+    baseTree.files = { ".rusty-bot.json": '{"skills": {"folders": []}}' };
+
+    await expect(run(args)).rejects.toThrow(/\.rusty-bot\.json/);
+    expect(runTriagedReview).not.toHaveBeenCalled();
   });
 });

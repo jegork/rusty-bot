@@ -20,11 +20,16 @@ const mocks = vi.hoisted(() => ({
   generatePRDescription: vi.fn(),
   logWarn: vi.fn(),
   logInfo: vi.fn(),
+  applyDesignPass: vi.fn(),
 }));
 
 vi.mock("../agent/multi-call.js", () => ({
   runCascadeReview: mocks.runCascadeReview,
   runMultiCallReview: mocks.runMultiCallReview,
+}));
+vi.mock("../agent/design-pass.js", () => ({
+  applyDesignPass: mocks.applyDesignPass,
+  isDesignPassEnabled: () => process.env.RUSTY_DESIGN_PASS === "true",
 }));
 vi.mock("../triage/triage.js", async (importOriginal) => ({
   ...(await importOriginal<typeof TriageModule>()),
@@ -148,6 +153,7 @@ beforeEach(() => {
   mocks.runOpenGrep.mockResolvedValue({ available: true, findings: [], rawCount: 0 });
   mocks.runMultiCallReview.mockResolvedValue(review());
   mocks.runCascadeReview.mockResolvedValue(review());
+  mocks.applyDesignPass.mockImplementation((r: ReviewResult) => Promise.resolve(r));
 });
 
 afterEach(async () => {
@@ -1133,5 +1139,46 @@ describe("runPrReview review scope", () => {
     expect(summary(provider)).toContain(
       "whole PR (the changes since the last review could not be computed)",
     );
+  });
+});
+
+describe("runPrReview design pass", () => {
+  it("runs on a whole-PR review, over every reviewable file, and publishes its result", async () => {
+    vi.stubEnv("RUSTY_DESIGN_PASS", "true");
+    const designFinding = finding({ message: "Design consistency: x" });
+    mocks.applyDesignPass.mockImplementationOnce((r: ReviewResult) =>
+      Promise.resolve({ ...r, findings: [designFinding] }),
+    );
+    const provider = makeProvider();
+
+    await runPrReview(makePlatform(provider));
+
+    const [, patches, metadata, maxTokens] = mocks.applyDesignPass.mock.calls[0] as [
+      ReviewResult,
+      FilePatch[],
+      PRMetadata,
+      number,
+    ];
+    expect(patches.map((p) => p.path)).toEqual([PATCH.path]);
+    expect(metadata.id).toBe(METADATA.id);
+    expect(maxTokens).toBe(1000);
+    expect(provider.postInlineComments).toHaveBeenCalledWith([designFinding]);
+  });
+
+  it("does not run on an incremental review, which only sees a delta", async () => {
+    vi.stubEnv("RUSTY_DESIGN_PASS", "true");
+    const provider = makeProvider({
+      getLastReviewedSha: vi.fn().mockResolvedValue("old"),
+      getDiffSinceSha: vi.fn().mockResolvedValue([PATCH]),
+    });
+
+    await runPrReview(makePlatform(provider));
+
+    expect(mocks.applyDesignPass).not.toHaveBeenCalled();
+  });
+
+  it("does not run when the flag is off", async () => {
+    await runPrReview(makePlatform(makeProvider()));
+    expect(mocks.applyDesignPass).not.toHaveBeenCalled();
   });
 });

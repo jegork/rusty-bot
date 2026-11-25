@@ -410,6 +410,11 @@ export function formatSummaryComment(
       parts.push("degraded — judge filtering only");
     }
   }
+  if (review.designPass) {
+    parts.push(
+      `design pass: ${review.designPass.published} of ${review.designPass.raised} confirmed · ${review.designPass.tokenCount} tokens`,
+    );
+  }
   if (review.openGrepStats?.available && review.openGrepStats.findingCount > 0) {
     parts.push(`opengrep: ${review.openGrepStats.findingCount} pre-scan findings`);
   }

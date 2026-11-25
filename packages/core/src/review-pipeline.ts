@@ -1,3 +1,4 @@
+import { applyDesignPass, isDesignPassEnabled } from "./agent/design-pass.js";
 import { runCascadeReview, runMultiCallReview } from "./agent/multi-call.js";
 import type { MultiCallReviewOptions } from "./agent/multi-call.js";
 import { buildPriorContextFromReview } from "./agent/prior-context.js";
@@ -519,7 +520,7 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
 
   const skills = await discoverSkills(provider, metadata.targetBranch, repoConfig?.skills);
 
-  const review = await runTriagedReview({
+  let review = await runTriagedReview({
     patches: reviewable,
     config,
     metadata,
@@ -538,6 +539,10 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
     },
   });
 
+  // only a whole-PR review sees every file side by side; a delta would hide the other copies
+  if (scope.mode === "full" && isDesignPassEnabled()) {
+    review = await applyDesignPass(review, reviewable, metadata, platform.maxTokens);
+  }
   review.reviewScope = scope;
   review.openGrepStats = {
     available: openGrepResult.available,

@@ -1296,6 +1296,31 @@ describe("buildFindingExcerpt", () => {
   });
 });
 
+describe("judge rubric override", () => {
+  it("uses the caller's rubric instead of the below-threshold one", async () => {
+    generateMock.mockReset();
+    generateMock.mockResolvedValueOnce({
+      object: { evaluations: [{ index: 0, confidence: 9, reasoning: "ok" }] },
+      usage: { totalTokens: 30 },
+    });
+
+    await judgeFindings(
+      [makeFinding()],
+      PATCHES,
+      { enabled: true, threshold: 6 },
+      {
+        alreadyReported: [],
+        rubric: "\n\nCUSTOM RUBRIC",
+      },
+    );
+
+    const call = generateMock.mock.calls[0][0] as { system: { content: string }[] };
+    const system = call.system.map((m) => m.content).join("");
+    expect(system).toContain("CUSTOM RUBRIC");
+    expect(system).not.toContain("fewer reviewers than the consensus threshold");
+  });
+});
+
 describe("judge formatter", () => {
   it("inlines a per-finding excerpt and does not dump the full repo diff", async () => {
     generateMock.mockReset();
@@ -1313,6 +1338,45 @@ describe("judge formatter", () => {
     expect(userMessage).toContain("- **Diff context:**");
     expect(userMessage).toContain("## src/app.ts");
     expect(userMessage).not.toContain("## Diff under review");
+  });
+
+  it("shows each related location of a cross-file finding with its own excerpt", async () => {
+    generateMock.mockReset();
+    generateMock.mockResolvedValueOnce({
+      object: { evaluations: [{ index: 0, confidence: 9, reasoning: "ok" }] },
+      usage: { totalTokens: 30 },
+    });
+
+    const finding = makeFinding({
+      file: "ghost.ts",
+      line: 12,
+      relatedLocations: [
+        { file: "src/app.ts", line: 3 },
+        { file: "a.ts", line: 1 },
+        { file: "b.ts", line: 1 },
+        { file: "c.ts", line: 1 },
+      ],
+    });
+    await judgeFindings([finding], PATCHES, { enabled: true, threshold: 6 });
+
+    const userMessage = (generateMock.mock.calls[0][0] as { prompt: string }).prompt;
+    expect(userMessage).toContain("- **Related locations:** src/app.ts:3, a.ts:1, b.ts:1, c.ts:1");
+    expect(userMessage).toContain("- **Diff context at src/app.ts:3:**");
+    expect(userMessage).toContain("## src/app.ts");
+    // excerpts are capped; every location is still named above
+    expect(userMessage).toContain("- **Diff context at b.ts:1:**");
+    expect(userMessage).not.toContain("- **Diff context at c.ts:1:**");
+  });
+
+  it("adds no related section for a single-location finding", async () => {
+    generateMock.mockReset();
+    generateMock.mockResolvedValueOnce({
+      object: { evaluations: [{ index: 0, confidence: 9, reasoning: "ok" }] },
+      usage: { totalTokens: 30 },
+    });
+    await judgeFindings([makeFinding()], PATCHES, { enabled: true, threshold: 6 });
+    const userMessage = (generateMock.mock.calls[0][0] as { prompt: string }).prompt;
+    expect(userMessage).not.toContain("Related locations");
   });
 
   it("uses the not-found sentinel for findings whose file isn't in the patches", async () => {

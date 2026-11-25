@@ -568,6 +568,13 @@ describe("formatSummaryComment review scope", () => {
     );
   });
 
+  it("reports the design pass in the footer only when it ran", () => {
+    expect(
+      formatSummaryComment({ ...base, designPass: { raised: 3, published: 1, tokenCount: 900 } }),
+    ).toContain("design pass: 1 of 3 confirmed · 900 tokens");
+    expect(formatSummaryComment(base)).not.toContain("design pass");
+  });
+
   it("leaves the line out when the scope is unknown (CLI runs)", () => {
     expect(formatSummaryComment(base)).not.toContain("Review scope");
   });

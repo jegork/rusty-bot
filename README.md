@@ -265,6 +265,7 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 | `RUSTY_JUDGE_ENABLED` | enable post-generation judge/filter pass | `false` |
 | `RUSTY_JUDGE_THRESHOLD` | minimum confidence score (0–10) to keep a finding | `6` |
 | `RUSTY_JUDGE_MODEL` | model for the judge (can be cheaper than reviewer) | same as `RUSTY_LLM_MODEL` |
+| `RUSTY_DESIGN_PASS` | when `true`, whole-PR reviews add one call that looks only for cross-file design problems; needs the judge. See [Design consistency pass](#design-consistency-pass) | `false` |
 | `RUSTY_LLM_TRIAGE_MODEL` | LLM model for triage classification (enables cascading) | — |
 | `RUSTY_CASCADE_ENABLED` | explicitly enable/disable cascading (`true`/`false`) | auto (enabled when triage model is set) |
 | `RUSTY_OPENGREP_RULES` | OpenGrep config string (ruleset or path to rule file) | `auto` |
@@ -630,6 +631,18 @@ RUSTY_JUDGE_MODEL=anthropic/claude-3-5-haiku-20241022  # optional, cheaper model
 **Cost:** The judge uses a single LLM call with structured output (no tools). Using a cheap model like Haiku adds ~1–3% to total cost. Using the same model as the reviewer adds ~30–50%.
 
 When the judge is disabled (default), the pipeline behaves exactly as before with zero overhead.
+
+### Design consistency pass
+
+The per-chunk reviewers read a PR file by file, so they miss problems that only show with every file side by side. With `RUSTY_DESIGN_PASS=true`, every whole-PR review (the first review, and the periodic and post-merge ones described under [Incremental Review](#incremental-review)) adds one tool-less call over the whole PR diff that looks for five patterns only:
+
+- the same concern implemented several ways across the PR
+- non-trivial logic duplicated across changed files
+- helpers that take a scope argument (tenant, organization, user) but do not filter or write by it
+- flag parameters whose combinations include meaningless states
+- locks that protect nothing shared or are held across network or disk I/O
+
+Each finding has to name a concrete failure mode, and at most five are kept. They never publish on the pass's word alone: the judge rules on them with a rubric for uncorroborated findings, sees the existing findings so it rejects rewordings, and gets the diff excerpt of each location the finding names (up to 3). The pass does not run when the judge is disabled, and if the judge call fails nothing from the pass is published. Published findings start with `Design consistency:` and end with their failure mode, and the summary footer shows how many were raised and confirmed. Incremental runs skip the pass, since a delta hides the other copies. It uses the same model and settings as a single-pass review.
 
 ### Incremental Review
 

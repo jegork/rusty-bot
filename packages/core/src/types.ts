@@ -128,6 +128,15 @@ export interface ReviewResult extends ReviewOutput {
   riskAssessment?: RiskAssessment;
   /** what the review covered and why; set by the CI pipeline for the summary */
   reviewScope?: ReviewScope;
+  /** the whole-PR design consistency pass (RUSTY_DESIGN_PASS); absent when it did not run */
+  designPass?: {
+    /** findings the pass raised that sat on files of this PR */
+    raised: number;
+    /** of those, the ones the judge confirmed and that were added to `findings` */
+    published: number;
+    /** design pass plus its judge call */
+    tokenCount: number;
+  };
 }
 
 export interface ReviewScope {

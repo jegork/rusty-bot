@@ -193,6 +193,15 @@ export interface PriorReviewContext {
   /** risk assessment of the prior pass, so an incremental re-review that only
    * sees the new diff cannot lower the PR-wide level below what was already seen */
   riskAssessment?: RiskAssessment;
+  /** concerns earlier runs raised but did not publish (below the consensus
+   * threshold, or not confirmed by arbitration), so a later run that sees
+   * more of the PR can confirm them. never treated as established issues */
+  unconfirmed?: PriorUnconfirmedConcern[];
+}
+
+export interface PriorUnconfirmedConcern extends PriorReviewContextFinding {
+  /** how many later runs have carried this concern without confirming it */
+  carriedRuns: number;
 }
 
 export interface Hunk {

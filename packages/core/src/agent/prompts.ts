@@ -359,5 +359,18 @@ function buildPriorContextSection(ctx: PriorReviewContext): string {
       parts.push(`- \`${f.file}\`:${f.line} (${f.severity}) — ${f.message}`);
     }
   }
+
+  if (ctx.unconfirmed && ctx.unconfirmed.length > 0) {
+    parts.push(
+      "\n**Unconfirmed concerns from earlier reviews** (raised by fewer reviewers than the consensus " +
+        "threshold, or rejected when checked; they are NOT established issues and were not published). " +
+        "For each one whose code you can see in the diff or reach with your tools, check it: if it holds, " +
+        "report it as a finding on a line in this diff; if it does not, leave it out. Never repeat one " +
+        "without checking it, and do not list them in your summary:",
+    );
+    for (const c of ctx.unconfirmed) {
+      parts.push(`- \`${c.file}\`:${c.line} (${c.severity}): ${c.message}`);
+    }
+  }
   return parts.join("\n");
 }

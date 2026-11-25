@@ -484,7 +484,10 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
   await provider.postSummaryComment(
     formatSummaryComment(review, { ticketResolution, authorRiskLevel }),
     current
-      ? { ...incremental.marker(current), priorContext: buildPriorContextFromReview(review) }
+      ? {
+          ...incremental.marker(current),
+          priorContext: buildPriorContextFromReview(review, incrementalUsed ? priorContext : null),
+        }
       : undefined,
   );
   await postInlineFindings(provider, review, reviewable);

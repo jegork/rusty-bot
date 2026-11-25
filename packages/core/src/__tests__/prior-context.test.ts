@@ -339,3 +339,170 @@ describe("risk assessment carry-forward", () => {
     expect(buildPriorContextFromReview(review).riskAssessment).toEqual(riskAssessment);
   });
 });
+
+describe("unconfirmed concerns carry-forward", () => {
+  const BLOB =
+    "Deleting an organization cascades to its document rows, but the uploaded blobs in storage are never removed, leaving orphaned blobs.";
+  const BLOB_NEAR =
+    "Deleting an organization cascades to its document rows, but the blobs in storage are never removed.";
+
+  function reviewWith(overrides: Partial<ReviewResult> = {}): ReviewResult {
+    return {
+      summary: "s",
+      recommendation: "looks_good",
+      findings: [],
+      observations: [],
+      ticketCompliance: [],
+      missingTests: [],
+      filesReviewed: [],
+      modelUsed: "m",
+      tokenCount: 1,
+      ...overrides,
+    };
+  }
+
+  function concern(message: string, overrides: Record<string, unknown> = {}) {
+    return {
+      file: "a.py",
+      line: 3,
+      severity: "warning" as const,
+      message,
+      carriedRuns: 0,
+      ...overrides,
+    };
+  }
+
+  it("records this run's dropped findings as fresh concerns", () => {
+    const ctx = buildPriorContextFromReview(
+      reviewWith({
+        droppedFindings: [
+          { file: "m.py", line: 18, severity: "warning", message: BLOB, voteCount: 1 },
+        ],
+      }),
+    );
+    expect(ctx.unconfirmed).toEqual([
+      { file: "m.py", line: 18, severity: "warning", message: BLOB, carriedRuns: 0 },
+    ]);
+  });
+
+  it("omits the field when there is nothing unconfirmed", () => {
+    expect(buildPriorContextFromReview(reviewWith())).not.toHaveProperty("unconfirmed");
+  });
+
+  it("ignores the previous context's concerns unless it is passed in (full reviews start over)", () => {
+    const previous = makeContext({
+      unconfirmed: [concern("stale cache key collision sharding tenant")],
+    });
+    expect(buildPriorContextFromReview(reviewWith(), null)).not.toHaveProperty("unconfirmed");
+    expect(buildPriorContextFromReview(reviewWith(), previous).unconfirmed).toHaveLength(1);
+  });
+
+  it("ages a carried concern by one run and retires it at the cap", () => {
+    const max = PRIOR_CONTEXT_LIMITS.unconfirmedMaxCarriedRuns;
+    const previous = makeContext({
+      unconfirmed: [
+        concern("young webhook replay window concern", { carriedRuns: 0 }),
+        concern("old tenant sharding drift concern", { carriedRuns: max - 1 }),
+      ],
+    });
+    const ctx = buildPriorContextFromReview(reviewWith(), previous);
+    expect(ctx.unconfirmed).toEqual([
+      concern("young webhook replay window concern", { carriedRuns: 1 }),
+    ]);
+  });
+
+  function published(file: string, line: number, message: string) {
+    return {
+      file,
+      line,
+      endLine: null,
+      severity: "warning" as const,
+      category: "bugs" as const,
+      message,
+      suggestedFix: null,
+    };
+  }
+
+  it("retires a concern this run published at the same place in similar words", () => {
+    const previous = makeContext({ unconfirmed: [concern(BLOB, { file: "m.py", line: 18 })] });
+    const ctx = buildPriorContextFromReview(
+      reviewWith({ findings: [published("m.py", 21, BLOB_NEAR)] }),
+      previous,
+    );
+    expect(ctx).not.toHaveProperty("unconfirmed");
+  });
+
+  it.each([
+    ["in another file", published("entity.py", 18, BLOB)],
+    ["beyond the line window", published("m.py", 40, BLOB)],
+    ["at the same place about something else", published("m.py", 18, "missing index on the slug")],
+  ])("keeps carrying a concern when the published finding sits %s", (_label, finding) => {
+    const previous = makeContext({ unconfirmed: [concern(BLOB, { file: "m.py", line: 18 })] });
+    const ctx = buildPriorContextFromReview(reviewWith({ findings: [finding] }), previous);
+    expect(ctx.unconfirmed).toEqual([concern(BLOB, { file: "m.py", line: 18, carriedRuns: 1 })]);
+  });
+
+  it("keeps one entry, the fresh one, when this run raised the same concern again below threshold", () => {
+    const previous = makeContext({ unconfirmed: [concern(BLOB, { carriedRuns: 1 })] });
+    const ctx = buildPriorContextFromReview(
+      reviewWith({
+        droppedFindings: [
+          { file: "a.py", line: 5, severity: "warning", message: BLOB_NEAR, voteCount: 1 },
+        ],
+      }),
+      previous,
+    );
+    expect(ctx.unconfirmed).toEqual([
+      { file: "a.py", line: 5, severity: "warning", message: BLOB_NEAR, carriedRuns: 0 },
+    ]);
+  });
+
+  it("keeps fresh concerns ahead of carried ones under the count cap", () => {
+    const cap = PRIOR_CONTEXT_LIMITS.unconfirmedCountCap;
+    const previous = makeContext({
+      unconfirmed: [concern("carried zebra quokka narwhal axolotl")],
+    });
+    const dropped = Array.from({ length: cap }, (_, i) => ({
+      file: `f${i}.py`,
+      line: i + 1,
+      severity: "suggestion" as const,
+      message: `fresh concern number ${i} about thing${i}`,
+      voteCount: 1,
+    }));
+    const ctx = buildPriorContextFromReview(reviewWith({ droppedFindings: dropped }), previous);
+    expect(ctx.unconfirmed).toHaveLength(cap);
+    expect(ctx.unconfirmed!.every((c) => c.carriedRuns === 0)).toBe(true);
+  });
+
+  it("roundtrips through the marker with caps applied", () => {
+    const cap = PRIOR_CONTEXT_LIMITS.unconfirmedCountCap;
+    const long = "x".repeat(PRIOR_CONTEXT_LIMITS.findingMessageCharCap + 50);
+    const ctx = makeContext({
+      unconfirmed: Array.from({ length: cap + 5 }, (_, i) => concern(long, { line: i + 1 })),
+    });
+    const decoded = extractPriorReviewContext(encodePriorReviewContext(ctx));
+    expect(decoded?.unconfirmed).toHaveLength(cap);
+    expect(decoded?.unconfirmed?.[0].message.endsWith("…")).toBe(true);
+    expect(decoded?.unconfirmed?.[0].carriedRuns).toBe(0);
+  });
+
+  it("decodes markers written before the field existed", () => {
+    const decoded = extractPriorReviewContext(encodePriorReviewContext(makeContext()));
+    expect(decoded).not.toBeNull();
+    expect(decoded?.unconfirmed).toBeUndefined();
+  });
+
+  it("rejects a marker whose concerns are malformed", () => {
+    for (const unconfirmed of [
+      "nope",
+      [{ file: "a", line: 1, severity: "warning", message: "m" }],
+      [concern("m", { carriedRuns: -1 })],
+      [concern("m", { carriedRuns: 1.5 })],
+      [concern("m", { severity: "fatal" })],
+    ]) {
+      const json = JSON.stringify({ ...makeContext(), unconfirmed });
+      const marker = `<!-- rusty-bot:context:${Buffer.from(json).toString("base64")} -->`;
+      expect(extractPriorReviewContext(marker)).toBeNull();
+    }
+  });
+});

@@ -642,6 +642,7 @@ When a PR gets new commits after a previous review, the bot only fetches the dif
    - `<!-- rusty-bot:context:... -->` — base64-encoded JSON of the prior summary + findings (capped: 4 000-char summary, 50 findings, 250-char message each)
 2. On the next push, the bot reads both markers from its previous comment, fetches only the new diff, and injects a `## Prior review context` section into the agent's prompt. The agent is explicitly told its summary must describe the **whole** PR, not just the new diff.
 3. The prior-findings list is annotated as "do NOT re-raise unless this commit changes the underlying code", which suppresses duplicate findings across re-reviews.
+4. Concerns that did not get published (below the consensus threshold, or rejected by arbitration) are carried too, in a separate **unconfirmed concerns** list (at most 15, 250 chars each). The agent is told they are not established issues: it checks each one it can see and reports it as a finding only if it holds. A concern is retired once a later run publishes it, and after 3 more runs if none does. A full review starts the list over.
 
 **Caps and trade-offs:**
 

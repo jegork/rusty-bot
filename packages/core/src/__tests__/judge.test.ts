@@ -34,6 +34,7 @@ vi.mock("../agent/model.js", () => ({
   applyModelConstraints: vi.fn((_config, settings) => settings),
 }));
 
+const { buildPriorContextFromReview } = await import("../agent/prior-context.js");
 const { judgeFindings, judgeReviewResult, resolveJudgeConfig, buildFindingExcerpt } =
   await import("../agent/judge.js");
 
@@ -876,6 +877,18 @@ describe("judgeReviewResult below-threshold arbitration", () => {
     expect(result.recommendation).toBe("critical_issues");
     expect(result.consensusMetadata?.recommendationElevated).toBe(false);
     expect(result).not.toHaveProperty("arbitrationCandidates");
+  });
+
+  it("carries a rejected candidate forward only as unconfirmed, and never a confirmed one", async () => {
+    const leak = makeFinding({ line: 2, message: "leaks secrets", voteCount: 1 });
+    const noise = makeFinding({ line: 3, message: "style nit", voteCount: 1 });
+    generateMock.mockResolvedValueOnce(evaluations(9, 2));
+
+    const result = await judgeReviewResult(makeElevatedReview([], [leak, noise]), PATCHES, JUDGE);
+    const next = buildPriorContextFromReview(result);
+
+    expect(next.findings.map((f) => f.message)).toEqual(["leaks secrets"]);
+    expect(next.unconfirmed?.map((c) => c.message)).toEqual(["style nit"]);
   });
 
   it("clears the elevation when the judge rejects every candidate", async () => {

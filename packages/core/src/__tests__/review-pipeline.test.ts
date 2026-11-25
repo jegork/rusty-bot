@@ -212,6 +212,52 @@ describe("runPrReview incremental state", () => {
     expect(mocks.runMultiCallReview.mock.calls[0][4].priorContext).toEqual(prior);
   });
 
+  it("carries earlier unconfirmed concerns into the next marker on an incremental run", async () => {
+    const prior = {
+      summary: "before",
+      recommendation: "looks_good",
+      findings: [],
+      unconfirmed: [
+        {
+          file: "x.py",
+          line: 1,
+          severity: "warning",
+          message: "quokka narwhal axolotl zebra",
+          carriedRuns: 0,
+        },
+      ],
+    };
+    const provider = makeProvider({
+      getLastReviewedSha: vi.fn().mockResolvedValue("old"),
+      getDiffSinceSha: vi.fn().mockResolvedValue([PATCH]),
+      getPriorReviewContext: vi.fn().mockResolvedValue(prior),
+    });
+
+    await runPrReview(makePlatform(provider));
+
+    const options = provider.postSummaryComment.mock.calls[0][1];
+    expect(options.priorContext.unconfirmed).toEqual([{ ...prior.unconfirmed[0], carriedRuns: 1 }]);
+  });
+
+  it("starts unconfirmed concerns over on a full review", async () => {
+    const provider = makeProvider({
+      getLastReviewedSha: vi.fn().mockResolvedValue("old"),
+      getDiffSinceSha: vi.fn().mockResolvedValue(null),
+      getPriorReviewContext: vi.fn().mockResolvedValue({
+        summary: "x",
+        recommendation: "looks_good",
+        findings: [],
+        unconfirmed: [{ file: "x.py", line: 1, severity: "warning", message: "m", carriedRuns: 0 }],
+      }),
+    });
+
+    await runPrReview(makePlatform(provider));
+
+    expect(provider.postSummaryComment.mock.calls[0][1].priorContext).not.toHaveProperty(
+      "unconfirmed",
+    );
+  });
+
   it("falls back to the full diff, without prior context, when the delta is unreachable", async () => {
     const provider = makeProvider({
       getLastReviewedSha: vi.fn().mockResolvedValue("old"),

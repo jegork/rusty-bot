@@ -127,6 +127,16 @@ describe("buildPlatform", () => {
       expect(getDiffSinceIteration).toHaveBeenCalledWith("6");
       expect(incremental.marker("7")).toEqual({ lastReviewedIteration: "7" });
     });
+
+    it("checks for a target merge between the two iterations", async () => {
+      const targetMergedSinceIteration = vi.fn().mockResolvedValue(true);
+      useProvider({ targetMergedSinceIteration });
+
+      await expect(platform().incremental.targetMergedSince?.("6", "9", METADATA)).resolves.toBe(
+        true,
+      );
+      expect(targetMergedSinceIteration).toHaveBeenCalledWith("6", "9");
+    });
   });
 });
 

@@ -29,6 +29,7 @@ export type {
   PriorReviewContext,
   PriorReviewContextFinding,
   PriorUnconfirmedConcern,
+  ReviewScope,
   TicketProvider,
   DroppedFinding,
   ConsensusMetadata,

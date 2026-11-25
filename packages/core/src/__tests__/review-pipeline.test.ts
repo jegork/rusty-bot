@@ -113,7 +113,7 @@ function makeProvider(overrides: Partial<Record<keyof GitProvider, unknown>> = {
     getDiffSinceSha: vi.fn().mockResolvedValue(null),
     getPriorReviewContext: vi.fn().mockResolvedValue(null),
   };
-  return { ...base, ...overrides } as typeof base;
+  return { ...base, ...overrides } as typeof base & { getMergeBase?: ReturnType<typeof vi.fn> };
 }
 
 function makePlatform(
@@ -131,7 +131,7 @@ function makePlatform(
     maxTokens: 1000,
     workspacePath: undefined,
     fetchAuthHeader: undefined,
-    incremental: headShaIncremental(provider),
+    incremental: headShaIncremental(provider as unknown as GitProvider),
     ticketSource: "github" as const,
     getLinkedTicketIds: vi.fn().mockResolvedValue([]),
     buildTicketProviders: vi.fn(() => new Map()),
@@ -269,6 +269,22 @@ describe("runPrReview incremental state", () => {
 
     expect(provider.getDiff).toHaveBeenCalled();
     expect(mocks.runMultiCallReview.mock.calls[0][4].priorContext).toBeUndefined();
+  });
+
+  it("keeps the prior context on the no-changes note, since the old summary holding it is deleted", async () => {
+    const priorContext = { summary: "before", recommendation: "looks_good", findings: [] };
+    const provider = makeProvider({
+      getLastReviewedSha: vi.fn().mockResolvedValue("old"),
+      getDiffSinceSha: vi.fn().mockResolvedValue([]),
+      getPriorReviewContext: vi.fn().mockResolvedValue(priorContext),
+    });
+
+    await runPrReview(makePlatform(provider));
+
+    expect(provider.postSummaryComment).toHaveBeenCalledWith(
+      "No reviewable changes since the last review.",
+      { lastReviewedSha: HEAD, priorContext },
+    );
   });
 
   it("posts a short note and skips the LLM when the delta has nothing reviewable", async () => {
@@ -962,5 +978,160 @@ describe("runPrReview repository skills", () => {
     await runPrReview(makePlatform(provider));
 
     expect(provider.listDirectory).not.toHaveBeenCalled();
+  });
+});
+
+describe("runPrReview review scope", () => {
+  const MAIN_ONLY: FilePatch = { ...PATCH, path: "src/from-main.ts" };
+  const PR_FILE_FULL: FilePatch = {
+    ...PATCH,
+    hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 3, content: "+pr\n+pr2\n ctx" }],
+  };
+  const OTHER_PR_FILE: FilePatch = { ...PATCH, path: "src/untouched-since.ts" };
+
+  function prior(overrides: Record<string, unknown> = {}) {
+    return { summary: "before", recommendation: "looks_good", findings: [], ...overrides };
+  }
+
+  // merge bases keyed by the sha they are asked about; the target ref is always first
+  function mergeBases(before: string | null, after: string | null) {
+    return vi.fn(async (_target: string, sha: string) => (sha === HEAD ? after : before));
+  }
+
+  function reviewedPaths(): string[] {
+    return (mocks.runMultiCallReview.mock.calls[0][0] as FilePatch[]).map((p) => p.path);
+  }
+
+  function summary(provider: ReturnType<typeof makeProvider>): string {
+    return provider.postSummaryComment.mock.calls[0][0] as string;
+  }
+
+  it("reviews the whole PR after a target merge and starts the run count over", async () => {
+    const provider = makeProvider({
+      getLastReviewedSha: vi.fn().mockResolvedValue("old"),
+      getDiffSinceSha: vi.fn().mockResolvedValue([PATCH, MAIN_ONLY]),
+      getPriorReviewContext: vi.fn().mockResolvedValue(prior({ incrementalRuns: 2 })),
+      getMergeBase: mergeBases("fork", "merged"),
+      getDiff: vi.fn().mockResolvedValue([PR_FILE_FULL, OTHER_PR_FILE]),
+    });
+
+    await runPrReview(makePlatform(provider));
+
+    expect(provider.getMergeBase).toHaveBeenCalledWith("main", "old");
+    expect(provider.getMergeBase).toHaveBeenCalledWith("main", HEAD);
+    expect(reviewedPaths()).toEqual(["src/index.ts", "src/untouched-since.ts"]);
+    expect(mocks.runMultiCallReview.mock.calls[0][4].priorContext).toBeUndefined();
+    expect(summary(provider)).toContain(
+      "**Review scope:** whole PR (main was merged in since the last review)",
+    );
+    expect(provider.postSummaryComment.mock.calls[0][1].priorContext.incrementalRuns).toBe(0);
+  });
+
+  it("stays incremental when the merge base did not move", async () => {
+    const provider = makeProvider({
+      getLastReviewedSha: vi.fn().mockResolvedValue("old"),
+      getDiffSinceSha: vi.fn().mockResolvedValue([PATCH]),
+      getPriorReviewContext: vi.fn().mockResolvedValue(prior({ incrementalRuns: 1 })),
+      getMergeBase: mergeBases("fork", "fork"),
+    });
+
+    await runPrReview(makePlatform(provider));
+
+    expect(provider.getDiff).not.toHaveBeenCalled();
+    expect(summary(provider)).toContain(
+      "**Review scope:** changes since the last review (re-review of new commits)",
+    );
+    expect(provider.postSummaryComment.mock.calls[0][1].priorContext.incrementalRuns).toBe(2);
+  });
+
+  it.each([
+    ["one merge base is unknown", mergeBases(null, "merged")],
+    ["the lookup throws", vi.fn().mockRejectedValue(new Error("api down"))],
+  ])("treats the delta as PR code when %s", async (_label, getMergeBase) => {
+    const provider = makeProvider({
+      getLastReviewedSha: vi.fn().mockResolvedValue("old"),
+      getDiffSinceSha: vi.fn().mockResolvedValue([PATCH]),
+      getMergeBase,
+    });
+
+    await runPrReview(makePlatform(provider));
+
+    expect(provider.getDiff).not.toHaveBeenCalled();
+    expect(reviewedPaths()).toEqual(["src/index.ts"]);
+  });
+
+  it("stays incremental for a provider that cannot resolve merge bases", async () => {
+    const provider = makeProvider({
+      getLastReviewedSha: vi.fn().mockResolvedValue("old"),
+      getDiffSinceSha: vi.fn().mockResolvedValue([PATCH]),
+    });
+
+    await runPrReview(makePlatform(provider));
+
+    expect(provider.getDiff).not.toHaveBeenCalled();
+  });
+
+  it("reviews the whole PR once the incremental run count reaches the interval", async () => {
+    const provider = makeProvider({
+      getLastReviewedSha: vi.fn().mockResolvedValue("old"),
+      getPriorReviewContext: vi.fn().mockResolvedValue(prior({ incrementalRuns: 5 })),
+      getMergeBase: mergeBases("fork", "fork"),
+    });
+
+    await runPrReview(makePlatform(provider));
+
+    // no delta or merge lookups are spent on a run that reviews everything anyway
+    expect(provider.getDiffSinceSha).not.toHaveBeenCalled();
+    expect(provider.getMergeBase).not.toHaveBeenCalled();
+    expect(provider.getDiff).toHaveBeenCalled();
+    expect(summary(provider)).toContain(
+      "**Review scope:** whole PR (5 incremental reviews since the last whole-PR review)",
+    );
+  });
+
+  it("stays incremental one run before the interval", async () => {
+    const provider = makeProvider({
+      getLastReviewedSha: vi.fn().mockResolvedValue("old"),
+      getDiffSinceSha: vi.fn().mockResolvedValue([PATCH]),
+      getPriorReviewContext: vi.fn().mockResolvedValue(prior({ incrementalRuns: 4 })),
+    });
+
+    await runPrReview(makePlatform(provider));
+
+    expect(provider.getDiff).not.toHaveBeenCalled();
+    expect(provider.postSummaryComment.mock.calls[0][1].priorContext.incrementalRuns).toBe(5);
+  });
+
+  it("counts a missing run count as zero (markers from older versions)", async () => {
+    const provider = makeProvider({
+      getLastReviewedSha: vi.fn().mockResolvedValue("old"),
+      getDiffSinceSha: vi.fn().mockResolvedValue([PATCH]),
+      getPriorReviewContext: vi.fn().mockResolvedValue(prior()),
+    });
+
+    await runPrReview(makePlatform(provider));
+
+    expect(provider.getDiff).not.toHaveBeenCalled();
+  });
+
+  it("labels a first review and a review with incremental review off", async () => {
+    const first = makeProvider();
+    await runPrReview(makePlatform(first));
+    expect(summary(first)).toContain("**Review scope:** whole PR (first review)");
+
+    const off = makeProvider();
+    await runPrReview(makePlatform(off, { incrementalReview: false }));
+    expect(summary(off)).toContain("**Review scope:** whole PR (incremental review is off)");
+  });
+
+  it("labels a full review when the delta cannot be computed", async () => {
+    const provider = makeProvider({
+      getLastReviewedSha: vi.fn().mockResolvedValue("old"),
+      getDiffSinceSha: vi.fn().mockResolvedValue(null),
+    });
+    await runPrReview(makePlatform(provider));
+    expect(summary(provider)).toContain(
+      "whole PR (the changes since the last review could not be computed)",
+    );
   });
 });

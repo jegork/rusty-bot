@@ -75,4 +75,6 @@ How it works:
 - If the latest iteration is the same as the previously-reviewed one, the run exits without re-posting anything.
 - If the delta has no reviewable files, the task skips the LLM call and posts a one-line summary instead.
 
+A run reviews the whole PR instead when the target branch was merged into the PR since the last review, or after 5 incremental reviews in a row. The summary states which scope ran.
+
 Enabled by default. To always review the full PR, set `RUSTY_INCREMENTAL_REVIEW=false` in the step `env:`.

@@ -250,6 +250,22 @@ export class AzureDevOpsProvider implements GitProvider {
     return null;
   }
 
+  /** whether the PR's merge base moved between two iterations; null when either is unknown */
+  async targetMergedSinceIteration(
+    sinceIterationId: string,
+    currentIterationId: string,
+  ): Promise<boolean | null> {
+    const iterations = await this.request(
+      `${this.baseUrl}/pullRequests/${this.pullRequestId}/iterations?${API_VERSION}`,
+      AdoIterationsSchema,
+    );
+    const baseOf = (id: string) =>
+      iterations.value.find((it) => String(it.id) === id)?.commonRefCommit?.commitId;
+    const before = baseOf(sinceIterationId);
+    const after = baseOf(currentIterationId);
+    return before && after ? before !== after : null;
+  }
+
   async getDiffSinceIteration(sinceIterationId: string): Promise<FilePatch[] | null> {
     const sinceId = parseInt(sinceIterationId, 10);
     if (Number.isNaN(sinceId)) return null;
@@ -342,6 +358,13 @@ export class AzureDevOpsProvider implements GitProvider {
     const lastIteration = iterations.value[iterations.value.length - 1];
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive guard against schema changes
     if (!lastIteration) return [];
+    // the old side is the merge base, not the target tip: once the target moves
+    // on, its tip would show the target's newer commits as this PR's deletions
+    const mergeBase = lastIteration.commonRefCommit?.commitId;
+    const readOld = (path: string) =>
+      mergeBase
+        ? this.getFileContentByCommit(path, mergeBase)
+        : this.getFileContentByVersion(path, targetRef);
 
     const changes = await this.request(
       `${this.baseUrl}/pullRequests/${this.pullRequestId}/iterations/${lastIteration.id}/changes?${API_VERSION}`,
@@ -368,7 +391,7 @@ export class AzureDevOpsProvider implements GitProvider {
       try {
         const [newContent, oldContent] = await Promise.all([
           this.getFileContentByVersion(filePath, sourceRef),
-          isAdd ? Promise.resolve(null) : this.getFileContentByVersion(oldPath, targetRef),
+          isAdd ? Promise.resolve(null) : readOld(oldPath),
         ]);
 
         if (newContent !== null) {

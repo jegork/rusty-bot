@@ -506,3 +506,40 @@ describe("unconfirmed concerns carry-forward", () => {
     }
   });
 });
+
+describe("incremental run counter", () => {
+  const review: ReviewResult = {
+    summary: "s",
+    recommendation: "looks_good",
+    findings: [],
+    observations: [],
+    ticketCompliance: [],
+    missingTests: [],
+    filesReviewed: [],
+    modelUsed: "m",
+    tokenCount: 1,
+  };
+
+  it("is 0 after a full review and counts up from the previous incremental context", () => {
+    expect(buildPriorContextFromReview(review).incrementalRuns).toBe(0);
+    expect(buildPriorContextFromReview(review, makeContext()).incrementalRuns).toBe(1);
+    expect(
+      buildPriorContextFromReview(review, makeContext({ incrementalRuns: 4 })).incrementalRuns,
+    ).toBe(5);
+  });
+
+  it("roundtrips through the marker, including 0", () => {
+    for (const incrementalRuns of [0, 7]) {
+      const decoded = extractPriorReviewContext(
+        encodePriorReviewContext(makeContext({ incrementalRuns })),
+      );
+      expect(decoded?.incrementalRuns).toBe(incrementalRuns);
+    }
+  });
+
+  it.each([-1, 1.5, "3", null])("rejects a marker whose counter is %s", (incrementalRuns) => {
+    const json = JSON.stringify({ ...makeContext(), incrementalRuns });
+    const marker = `<!-- rusty-bot:context:${Buffer.from(json).toString("base64")} -->`;
+    expect(extractPriorReviewContext(marker)).toBeNull();
+  });
+});

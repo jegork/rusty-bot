@@ -214,6 +214,13 @@ export function formatSummaryComment(
   );
   lines.push("");
 
+  if (review.reviewScope) {
+    const covered =
+      review.reviewScope.mode === "full" ? "whole PR" : "changes since the last review";
+    lines.push(`**Review scope:** ${covered} (${review.reviewScope.reason})`);
+    lines.push("");
+  }
+
   if (review.riskAssessment) {
     lines.push(buildRiskSection(review.riskAssessment, options?.authorRiskLevel));
   }

@@ -268,6 +268,23 @@ export class GitHubProvider implements GitProvider {
     }
   }
 
+  async getMergeBase(ref: string, otherRef: string): Promise<string | null> {
+    try {
+      const { data } = await this.octokit.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
+        owner: this.owner,
+        repo: this.repo,
+        basehead: `${ref}...${otherRef}`,
+        // only the merge base is read; keep the commit list out of the payload
+        per_page: 1,
+      });
+      const sha = (data as { merge_base_commit?: { sha?: unknown } }).merge_base_commit?.sha;
+      return typeof sha === "string" ? sha : null;
+    } catch (err) {
+      log.warn({ err, ref, otherRef }, "could not resolve merge base");
+      return null;
+    }
+  }
+
   async getLastReviewedSha(): Promise<string | null> {
     const comments = await this.fetchPRCommentsCached();
 

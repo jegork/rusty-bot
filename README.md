@@ -651,6 +651,15 @@ When a PR gets new commits after a previous review, the bot only fetches the dif
 - If a force-push or rebase makes the prior SHA unreachable, the bot transparently falls back to a full review — there is no fragile state.
 - Disable with `RUSTY_INCREMENTAL_REVIEW=false`; the bot then re-reviews the full PR every time and posts no carry-forward markers.
 
+**When a run reviews the whole PR anyway:**
+
+An incremental run only ever sees code in deltas, so code that arrived across several pushes is never seen side by side, and a merge of the target branch makes the delta full of code the PR never touched. So a run widens to the whole PR, diffed against its merge base, when:
+
+- the target branch was merged into the PR (or the PR rebased onto it) since the last review, seen as the PR's merge base moving. The merge-base diff leaves the target branch's own changes out, so they are never reviewed as PR code.
+- 5 incremental reviews ran in a row since the last whole-PR review.
+
+The summary states which scope ran and why (`**Review scope:** whole PR (main was merged in since the last review)`). Azure DevOps diffs the whole PR against the iteration's merge base rather than the target branch tip, so commits that landed on the target after the PR branched do not show up as the PR's deletions.
+
 ### LLM Request Timeouts
 
 Node's underlying HTTP client (undici) defaults to a **300-second headers timeout**. On large PRs reviewed with slower upstream routes — particularly Requesty proxying to Fireworks/Kimi or other long-tail providers — the response headers may not arrive within that window even though the model is making forward progress. The default would surface as a `HeadersTimeoutError` (`UND_ERR_HEADERS_TIMEOUT`) on the affected pass.

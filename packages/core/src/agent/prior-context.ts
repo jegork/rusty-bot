@@ -83,6 +83,7 @@ export function buildPriorContextFromReview(
     filesReviewed: review.filesReviewed,
     ...(review.riskAssessment ? { riskAssessment: review.riskAssessment } : {}),
     ...(unconfirmed.length > 0 && { unconfirmed }),
+    incrementalRuns: previous ? (previous.incrementalRuns ?? 0) + 1 : 0,
   };
 }
 
@@ -123,6 +124,7 @@ export function encodePriorReviewContext(ctx: PriorReviewContext): string {
           })),
         }
       : {}),
+    ...(ctx.incrementalRuns !== undefined ? { incrementalRuns: ctx.incrementalRuns } : {}),
   };
   const json = JSON.stringify(truncated);
   const b64 = Buffer.from(json, "utf-8").toString("base64");
@@ -182,6 +184,16 @@ function isContext(value: unknown): value is PriorReviewContext {
   }
   // same rule for the risk assessment: absent is fine, malformed means tampered
   if (v.riskAssessment !== undefined && !isRiskAssessment(v.riskAssessment)) return false;
+  if (
+    v.incrementalRuns !== undefined &&
+    !(
+      typeof v.incrementalRuns === "number" &&
+      Number.isInteger(v.incrementalRuns) &&
+      v.incrementalRuns >= 0
+    )
+  ) {
+    return false;
+  }
   if (v.unconfirmed !== undefined) {
     if (!Array.isArray(v.unconfirmed)) return false;
     if (!v.unconfirmed.every(isUnconfirmedConcern)) return false;

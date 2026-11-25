@@ -21,6 +21,7 @@ import {
   GitLabMergeRequestSchema,
   GitLabMergeRequestDiffsSchema,
   GitLabRepositoryCompareSchema,
+  GitLabCommitRefSchema,
   GitLabNotesSchema,
   GitLabDiscussionsSchema,
   GitLabClosesIssuesSchema,
@@ -258,6 +259,18 @@ export class GitLabProvider implements GitProvider {
         { err, sinceSha, headSha },
         "could not fetch incremental diff (sha unreachable, force-push, or rebase)",
       );
+      return null;
+    }
+  }
+
+  async getMergeBase(ref: string, otherRef: string): Promise<string | null> {
+    try {
+      const url =
+        `${this.projectBase}/repository/merge_base?refs[]=${encodeURIComponent(ref)}` +
+        `&refs[]=${encodeURIComponent(otherRef)}`;
+      return (await this.request(url, GitLabCommitRefSchema)).id;
+    } catch (err) {
+      log.warn({ err, ref, otherRef }, "could not resolve merge base");
       return null;
     }
   }

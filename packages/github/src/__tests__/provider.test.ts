@@ -542,6 +542,28 @@ describe("GitHubProvider", () => {
     });
   });
 
+  describe("getMergeBase", () => {
+    it("reads the merge base from a compare of the two refs, with a minimal commit page", async () => {
+      octokit.request.mockResolvedValueOnce({ data: { merge_base_commit: { sha: "base123" } } });
+
+      await expect(provider.getMergeBase("main", "abc")).resolves.toBe("base123");
+      expect(octokit.request).toHaveBeenCalledWith(
+        "GET /repos/{owner}/{repo}/compare/{basehead}",
+        expect.objectContaining({ basehead: "main...abc", per_page: 1 }),
+      );
+    });
+
+    it("is null when the response has no merge base", async () => {
+      octokit.request.mockResolvedValueOnce({ data: {} });
+      await expect(provider.getMergeBase("main", "abc")).resolves.toBeNull();
+    });
+
+    it("is null when the compare fails (unknown sha after a force-push)", async () => {
+      octokit.request.mockRejectedValueOnce(Object.assign(new Error("Not Found"), { status: 404 }));
+      await expect(provider.getMergeBase("main", "abc")).resolves.toBeNull();
+    });
+  });
+
   describe("deleteExistingBotComments", () => {
     it("deletes only comments containing the bot marker", async () => {
       octokit.request.mockImplementation((route: string) => {

@@ -126,6 +126,15 @@ export interface ReviewResult extends ReviewOutput {
   scopeCreep?: ScopeCreepItem[];
   /** whole-PR risk assessment; only populated when `ReviewConfig.assessRisk` is on */
   riskAssessment?: RiskAssessment;
+  /** what the review covered and why; set by the CI pipeline for the summary */
+  reviewScope?: ReviewScope;
+}
+
+export interface ReviewScope {
+  /** "full" is the whole PR against its merge base; "incremental" only what changed since the last review */
+  mode: "full" | "incremental";
+  /** human-readable reason, rendered in the summary */
+  reason: string;
 }
 
 export interface ReviewConfig {
@@ -197,6 +206,8 @@ export interface PriorReviewContext {
    * threshold, or not confirmed by arbitration), so a later run that sees
    * more of the PR can confirm them. never treated as established issues */
   unconfirmed?: PriorUnconfirmedConcern[];
+  /** incremental reviews since the last whole-PR review; drives the periodic full review */
+  incrementalRuns?: number;
 }
 
 export interface PriorUnconfirmedConcern extends PriorReviewContextFinding {
@@ -277,6 +288,8 @@ export interface GitProvider {
   getLastReviewedSha?(): Promise<string | null>;
   /** fetch only the diff between an earlier sha and the current head; null if unreachable */
   getDiffSinceSha?(sinceSha: string, headSha: string): Promise<FilePatch[] | null>;
+  /** the merge base of two refs or shas; null when it cannot be resolved */
+  getMergeBase?(ref: string, otherRef: string): Promise<string | null>;
   /** read PR-wide context (summary + findings) embedded in a previously-posted summary comment, if any */
   getPriorReviewContext?(): Promise<PriorReviewContext | null>;
   /** PR labels, for platforms that have them; the risk policy reads the author's level from these */

@@ -15,6 +15,7 @@ import { formatMissingRiskLabelComment, formatRiskDisagreementComment } from "./
 import { logger } from "./logger.js";
 import { loadMcpServerConfigsFromEnv } from "./mcp/client.js";
 import { extractChangedFilePaths, runOpenGrep } from "./opengrep/runner.js";
+import { GitHistory } from "./repo/history.js";
 import { resolveRepoCheckout } from "./repo/resolve.js";
 import {
   fetchRepoConfig,
@@ -416,6 +417,9 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
     headSha: metadata.headSha,
     fetchAuthHeader: platform.fetchAuthHeader,
   });
+  const gitHistory = checkout
+    ? await GitHistory.resolve(checkout.repoPath, metadata.targetBranch)
+    : null;
   const fetchSourceFile = (path: string) =>
     checkout ? checkout.readFile(path) : provider.getFileContent(path, metadata.sourceBranch);
 
@@ -531,6 +535,7 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
       provider,
       sourceRef: metadata.sourceBranch,
       checkout: checkout ?? undefined,
+      ...(gitHistory && { gitHistory }),
       languageSummary,
       mcpServers,
       maxTokens: platform.maxTokens,

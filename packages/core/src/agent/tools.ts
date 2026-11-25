@@ -1,6 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import type { CodeGraphIndex } from "../repo/codegraph.js";
+import { HISTORY_COMMIT_LIMIT, type GitHistory } from "../repo/history.js";
 import { parseSkillFile, type SkillIndex } from "../skills.js";
 import type { GitProvider } from "../types.js";
 import type { ToolCache } from "./tool-cache.js";
@@ -214,6 +215,52 @@ export function createLoadSkillTool(cache: ToolCache, provider: GitProvider, ind
         return capFileContent({ content: "error" in parsed ? content : parsed.body });
       }
       return capFileContent({ content });
+    },
+  });
+}
+
+export function createGitHistoryTool(history: GitHistory) {
+  return tool({
+    description:
+      `Search the commit history of the target branch (${history.targetBranch}), including ` +
+      "commits that were later reverted and the reverts themselves. Give path to list the " +
+      "commits that touched a file or directory, query to find the commits that added or " +
+      "removed an exact string (a migration revision id, a function or table name), or both. " +
+      `Returns up to ${HISTORY_COMMIT_LIMIT} commits, newest first, each with the files it ` +
+      "changed under path, or all of them without one (A added, M modified, D deleted, R renamed). Use it to check whether something " +
+      "this PR adds already existed, was removed, or was reverted. It does not see this PR's commits.",
+    inputSchema: z.object({
+      path: z.string().optional().describe("file or directory path relative to the repo root"),
+      query: z.string().optional().describe("exact string whose addition or removal to find"),
+    }),
+    outputSchema: z.object({
+      commits: z.array(
+        z.object({
+          sha: z.string(),
+          date: z.string(),
+          subject: z.string(),
+          files: z.array(z.string()),
+          moreFiles: z.number(),
+        }),
+      ),
+      truncated: z.boolean(),
+      error: z.string().optional(),
+    }),
+    execute: async ({ path, query }) => {
+      const cleanPath = path?.trim() || undefined;
+      const cleanQuery = query?.trim() || undefined;
+      if (!cleanPath && !cleanQuery) {
+        return { commits: [], truncated: false, error: "give path, query, or both" };
+      }
+      try {
+        return await history.log({ path: cleanPath, query: cleanQuery });
+      } catch {
+        return {
+          commits: [],
+          truncated: false,
+          error: "the history lookup failed; this is not evidence that nothing matched",
+        };
+      }
     },
   });
 }

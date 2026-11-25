@@ -9,8 +9,10 @@ import {
   MAX_SEARCH_RESULTS,
   MAX_SEARCH_FRAGMENT_CHARS,
   MAX_FILE_CONTEXT_CHARS,
+  createGitHistoryTool,
 } from "../agent/tools.js";
 import type { SkillIndex } from "../skills.js";
+import type { GitHistory } from "../repo/history.js";
 
 function makeResult(file: string, content: string) {
   return { file, line: 1, content };
@@ -444,5 +446,62 @@ describe("loadSkill tool", () => {
     expect(
       buildTools({ checkout, provider, skills: { ...skills, skills: [] } }),
     ).not.toHaveProperty("loadSkill");
+  });
+});
+
+describe("gitHistory tool", () => {
+  const checkout = { approximate: false, grep: vi.fn(), readFile: vi.fn() } as any;
+
+  function fakeHistory(log = vi.fn(async () => ({ commits: [], truncated: false }))) {
+    return { targetBranch: "main", log } as unknown as GitHistory & { log: typeof log };
+  }
+
+  function run(tool: unknown, input: object) {
+    return (tool as { execute: (i: object, o: object) => Promise<any> }).execute(input, {});
+  }
+
+  it("is offered to deep review only when a history is present", () => {
+    expect(buildTools({ checkout })).not.toHaveProperty("gitHistory");
+    expect(buildTools({ checkout, gitHistory: fakeHistory() })).toHaveProperty("gitHistory");
+    expect(buildTools({ checkout, gitHistory: fakeHistory(), tier: "skim" })).toEqual({});
+  });
+
+  it("names the target branch and says it cannot see the PR's own commits", () => {
+    const tool = createGitHistoryTool(fakeHistory()) as unknown as { description: string };
+    expect(tool.description).toContain("target branch (main)");
+    expect(tool.description).toContain("does not see this PR's commits");
+  });
+
+  it("asks for a path or query instead of running an unbounded log", async () => {
+    const history = fakeHistory();
+    const tool = createGitHistoryTool(history);
+
+    for (const input of [{}, { path: "  ", query: "" }]) {
+      expect(await run(tool, input)).toEqual({
+        commits: [],
+        truncated: false,
+        error: "give path, query, or both",
+      });
+    }
+    expect(history.log).not.toHaveBeenCalled();
+  });
+
+  it("passes trimmed values and returns the log", async () => {
+    const result = { commits: [], truncated: true };
+    const history = fakeHistory(vi.fn(async () => result));
+
+    expect(await run(createGitHistoryTool(history), { path: " a/b ", query: " abc123 " })).toBe(
+      result,
+    );
+    expect(history.log).toHaveBeenCalledWith({ path: "a/b", query: "abc123" });
+  });
+
+  it("reports a failed lookup as unknown, not as no matches", async () => {
+    const history = fakeHistory(vi.fn().mockRejectedValue(new Error("boom")));
+
+    const out = await run(createGitHistoryTool(history), { query: "x" });
+
+    expect(out.commits).toEqual([]);
+    expect(out.error).toContain("not evidence that nothing matched");
   });
 });

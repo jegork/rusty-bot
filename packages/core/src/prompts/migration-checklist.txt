@@ -1,0 +1,9 @@
+## Migration checklist
+
+This chunk changes database migrations. Besides the usual review, check each of these against the diff, and report one only with the concrete failure it causes:
+
+- Revision ids: a new migration must not reuse a revision id that already shipped, including one that was later reverted or deleted; a database that ran the old migration will skip the new one. When the gitHistory tool is available, search the target branch for the revision id and for the migration's file name.
+- Downgrade: the downgrade must still work after the application ran on the new schema, e.g. after it seeded rows at runtime or wrote values the old schema cannot hold.
+- Nullability and backfills: a NOT NULL column or a new constraint on a table that already has rows needs a default or a backfill, and the backfill must hold for every existing row, not only the ones the author had in mind.
+- Cascading deletes: ON DELETE CASCADE removes rows but not what they point to outside the database (blobs, files, search documents, external records). Check that something cleans those up.
+- Merge migrations: a migration that only joins heads with empty upgrade and downgrade must join the heads that actually exist; flag one that hides two branches changing the same table.

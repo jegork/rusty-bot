@@ -986,6 +986,14 @@ How it works:
 
 The tools stay off unless `RUSTY_CODEGRAPH=true`, even in the image that ships the binary; unset it or set it to anything else to turn them off.
 
+### Git History Tool
+
+Some problems are only visible in history: a migration that reuses the revision id of one that shipped and was reverted looks like a brand new file in the diff. When the CI checkout holds the target branch's full history, deep-review passes get a read-only `gitHistory` tool that runs `git log` on the target branch, by path or by an exact string (`git log -S`), including reverted commits and the reverts. It returns at most 20 commits with up to 10 changed files each, and never sees the PR's own commits.
+
+The default checkouts are shallow, and a shallow history would answer "no commits" for anything older than its boundary, so the tool is only offered when the checkout is not shallow and has `origin/<target>` (or a local `<target>` branch). Turn it on with `fetch-depth: 0` on `actions/checkout` (GitHub) or `fetchDepth: 0` on the `checkout` step (Azure Pipelines). There is no API fallback yet.
+
+When a chunk changes migration files (`migrations/`, `migrate/`, `alembic/versions/`, `prisma/migrations/`, Flyway `V<n>__*.sql`), its prompt also gets a short checklist: revision ids never reused or previously reverted, downgrades that still work after runtime seeding, nullability and backfill assumptions, external resources such as blobs left behind by cascading deletes, and merge migrations that only join heads.
+
 ### Ticket Integration
 
 Rusty Bot discovers linked tickets through three mechanisms:

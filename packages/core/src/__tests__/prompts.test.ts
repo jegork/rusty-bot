@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSystemPrompt, buildUserMessage } from "../agent/prompts.js";
+import { buildSystemPrompt, buildUserMessage, isMigrationPath } from "../agent/prompts.js";
 import type { PRMetadata, ReviewConfig } from "../types.js";
 
 const config: ReviewConfig = {
@@ -197,5 +197,71 @@ describe("placeholder substitution", () => {
     expect(prompt).toContain("Rubric mentions {{convention_instructions}} verbatim.");
     expect(prompt.match(/HOUSE RULES/g)).toHaveLength(1);
     expect(prompt.indexOf("HOUSE RULES")).toBeGreaterThan(prompt.indexOf("Rubric mentions"));
+  });
+});
+
+describe("migration checklist", () => {
+  function withChunk(chunkFiles?: string[]) {
+    return buildUserMessage(
+      "diff",
+      metadata,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      chunkFiles,
+    );
+  }
+
+  it.each([
+    "alembic/versions/abc123_add_documents.py",
+    "backend/app/migrations/0042_org.py",
+    "db/migrate/20260101_add_index.rb",
+    "prisma/migrations/20260101_init/migration.sql",
+    "src/main/resources/db/V2__add_column.sql",
+    "sql/V1_1__seed.sql",
+    "Migrations/Init.cs",
+  ])("recognises %s as a migration", (path) => {
+    expect(isMigrationPath(path)).toBe(true);
+  });
+
+  it.each([
+    "src/migrationHelper.ts",
+    "docs/migrating-to-v2.md",
+    "src/versions/v1.ts",
+    "alembic/env.py",
+    "V2__no_sql_extension.txt",
+    "notmigrations/x.py",
+  ])("does not treat %s as a migration", (path) => {
+    expect(isMigrationPath(path)).toBe(false);
+  });
+
+  it("adds the checklist when a chunk file is a migration", () => {
+    const msg = withChunk(["src/app.py", "alembic/versions/abc123_add.py"]);
+    expect(msg).toContain("## Migration checklist");
+    expect(msg).toContain("reuse a revision id");
+    expect(msg).toContain("ON DELETE CASCADE removes rows but not what they point to");
+    expect(msg).toContain("only joins heads");
+    expect(msg.indexOf("## Migration checklist")).toBeLessThan(msg.indexOf("## Diff"));
+  });
+
+  it("leaves it out for chunks without migrations, or without a chunk list", () => {
+    expect(withChunk(["src/app.py"])).not.toContain("Migration checklist");
+    expect(withChunk(undefined)).not.toContain("Migration checklist");
+  });
+});
+
+describe("gitHistory tool instruction", () => {
+  it("is listed for deep review when the tool is offered, naming the branch", () => {
+    const system = buildSystemPrompt(config, "deep-review", "pr-head", false, undefined, "develop");
+    expect(system).toContain("**gitHistory**");
+    expect(system).toContain("target branch (develop)");
+  });
+
+  it("is absent without the tool and on the skim tier", () => {
+    expect(buildSystemPrompt(config, "deep-review", "pr-head")).not.toContain("gitHistory");
+    expect(buildSystemPrompt(config, "skim", "pr-head", false, undefined, "main")).not.toContain(
+      "gitHistory",
+    );
   });
 });

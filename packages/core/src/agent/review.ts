@@ -42,7 +42,9 @@ import {
   createExploreCodeTool,
   createFindSymbolTool,
   createLoadSkillTool,
+  createGitHistoryTool,
 } from "./tools.js";
+import type { GitHistory } from "../repo/history.js";
 import type { SkillIndex } from "../skills.js";
 import { ToolCache, checkoutCodeSource, providerCodeSource } from "./tool-cache.js";
 import { logger } from "../logger.js";
@@ -517,6 +519,8 @@ export interface RunReviewOptions {
   codeGraph?: CodeGraphIndex;
   /** repository skills found on the target branch; adds loadSkill and the skills listing to deep review. */
   skills?: SkillIndex;
+  /** target-branch history of a full-history checkout; adds gitHistory to deep review. */
+  gitHistory?: GitHistory;
 }
 
 export function createToolCache(options: RunReviewOptions): ToolCache | undefined {
@@ -544,6 +548,9 @@ export function buildTools(options?: RunReviewOptions): ToolSet {
   if (options.skills && options.skills.skills.length > 0 && options.provider) {
     tools.loadSkill = createLoadSkillTool(cache, options.provider, options.skills);
   }
+  if (options.gitHistory) {
+    tools.gitHistory = createGitHistoryTool(options.gitHistory);
+  }
   return tools;
 }
 
@@ -568,6 +575,7 @@ export async function runReview(
     searchScope,
     "findSymbol" in builtInTools,
     "loadSkill" in builtInTools ? options?.skills?.listing.text : undefined,
+    "gitHistory" in builtInTools ? options?.gitHistory?.targetBranch : undefined,
   );
   const userMessage = buildUserMessage(
     diff,

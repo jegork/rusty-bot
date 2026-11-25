@@ -502,6 +502,24 @@ describe("runPrReview checkout", () => {
     expect(checkout.approximate).toBe(false);
     for (const [, ref] of provider.getFileContent.mock.calls) expect(ref).toBe("main");
   });
+
+  it("offers the target branch history of a full-history checkout", async () => {
+    const repo = await setupRepo();
+    const provider = makeProvider({
+      getPRMetadata: vi.fn().mockResolvedValue({ ...METADATA, headSha: repo.headSha }),
+    });
+
+    await runPrReview(makePlatform(provider, { workspacePath: repo.path }));
+
+    const { gitHistory } = mocks.runMultiCallReview.mock.calls[0][4];
+    expect(gitHistory.targetBranch).toBe("main");
+    expect(gitHistory.ref).toBe(repo.headSha);
+  });
+
+  it("offers no history without a checkout", async () => {
+    await runPrReview(makePlatform(makeProvider()));
+    expect(mocks.runMultiCallReview.mock.calls[0][4]).not.toHaveProperty("gitHistory");
+  });
 });
 
 describe("runPrReview opengrep", () => {

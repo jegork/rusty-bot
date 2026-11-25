@@ -66,6 +66,9 @@ const CODE_GRAPH_TOOL_INSTRUCTIONS = `
 - **exploreCode**: show the source of the symbols most relevant to a query and how they call each other, from this PR's head commit.
 Prefer findSymbol / exploreCode over repeated searchCode calls when you need definitions or callers.`;
 
+const gitHistoryToolInstruction = (branch: string) => `
+- **gitHistory**: search the commit history of the target branch (${branch}) by path or by an exact string, including reverted commits. Use it when the PR adds something that may have existed before, such as a migration revision id.`;
+
 const LOAD_SKILL_TOOL_INSTRUCTION = `
 - **loadSkill**: load one of the repository's review skills listed below, with the team's rules for that area.`;
 
@@ -95,6 +98,7 @@ export function buildSystemPrompt(
   searchScope: SearchScope = "remote",
   codeGraphTools = false,
   skillsListing?: string,
+  gitHistoryBranch?: string,
 ): string {
   const base = loadTemplate("base.txt");
   const styleInstructions = buildStyleInstructions(config.style);
@@ -117,6 +121,9 @@ export function buildSystemPrompt(
     codeGraphTools && tier === "deep-review"
       ? tierSections.tool_instructions + CODE_GRAPH_TOOL_INSTRUCTIONS
       : tierSections.tool_instructions;
+  if (gitHistoryBranch && tier === "deep-review") {
+    toolInstructions += gitHistoryToolInstruction(gitHistoryBranch);
+  }
   if (skillsListing && tier === "deep-review") {
     toolInstructions += `${LOAD_SKILL_TOOL_INSTRUCTION}\n\n${skillsListing}`;
   }
@@ -194,6 +201,14 @@ function buildOpenGrepSection(findings: OpenGrepFinding[]): string {
   return parts.join("\n");
 }
 
+// alembic, django, rails, prisma, knex/typeorm style folders, and flyway file names
+const MIGRATION_PATH =
+  /(^|\/)(migrations?|migrate|alembic\/versions)\/|(^|\/)V\d+(_\d+)*__[^/]+\.sql$/i;
+
+export function isMigrationPath(path: string): boolean {
+  return MIGRATION_PATH.test(path);
+}
+
 export function buildUserMessage(
   diff: string,
   prMetadata: PRMetadata,
@@ -230,6 +245,11 @@ export function buildUserMessage(
         "describe it in the summary or as an `observation` instead of a finding.\n",
     );
     parts.push(chunkFiles.map((f) => `- \`${f}\``).join("\n"));
+  }
+
+  if (chunkFiles?.some(isMigrationPath)) {
+    parts.push("");
+    parts.push(loadTemplate("migration-checklist.txt").trim());
   }
 
   if (ticketContext && ticketContext.length > 0) {

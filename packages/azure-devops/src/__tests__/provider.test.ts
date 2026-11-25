@@ -1005,6 +1005,94 @@ describe("AzureDevOpsProvider", () => {
     });
   });
 
+  describe("getDiff old side", () => {
+    function routeFetch(iteration: Record<string, unknown>) {
+      const route = (url: string): Response => {
+        if (url.includes("/iterations/1/changes")) {
+          return mockFetchResponse({
+            changeEntries: [
+              { changeType: "edit", item: { path: "/src/a.ts", gitObjectType: "blob" } },
+            ],
+          });
+        }
+        if (url.includes("/iterations?")) return mockFetchResponse({ value: [iteration] });
+        if (url.includes("/items?")) {
+          return mockFileContentResponse(url.includes("feature") ? "new\n" : "old\n");
+        }
+        return mockFetchResponse({
+          pullRequestId: 42,
+          title: "t",
+          sourceRefName: "refs/heads/feature",
+          targetRefName: "refs/heads/main",
+        });
+      };
+      // awaiting a plain value yields it, so the route can answer synchronously
+      fetchSpy.mockImplementation(route);
+    }
+
+    function itemUrls(): string[] {
+      return fetchSpy.mock.calls.map((c) => c[0] as string).filter((u) => u.includes("/items?"));
+    }
+
+    it("reads the old side at the iteration's merge base, not the target tip", async () => {
+      routeFetch({ id: 1, commonRefCommit: { commitId: "base123" } });
+
+      const patches = await provider.getDiff();
+
+      expect(patches.map((p) => p.path)).toEqual(["src/a.ts"]);
+      const oldSide = itemUrls().find((u) => !u.includes("feature"));
+      expect(oldSide).toContain("versionDescriptor.version=base123");
+      expect(oldSide).toContain("versionDescriptor.versionType=commit");
+    });
+
+    it("falls back to the target branch when the iteration has no merge base", async () => {
+      routeFetch({ id: 1, commonRefCommit: null });
+
+      await provider.getDiff();
+
+      const oldSide = itemUrls().find((u) => !u.includes("feature"));
+      expect(oldSide).toContain("versionDescriptor.version=main");
+      expect(oldSide).toContain("versionDescriptor.versionType=branch");
+    });
+  });
+
+  describe("targetMergedSinceIteration", () => {
+    function iterations(value: unknown[]) {
+      fetchSpy.mockResolvedValueOnce(mockFetchResponse({ value }));
+    }
+
+    it("is true when the merge base moved between the iterations", async () => {
+      iterations([
+        { id: 3, commonRefCommit: { commitId: "fork" } },
+        { id: 4, commonRefCommit: { commitId: "fork" } },
+        { id: 5, commonRefCommit: { commitId: "merged" } },
+      ]);
+      await expect(provider.targetMergedSinceIteration("3", "5")).resolves.toBe(true);
+    });
+
+    it("is false when the merge base stayed put, even if the target moved on", async () => {
+      iterations([
+        { id: 3, commonRefCommit: { commitId: "fork" } },
+        { id: 5, commonRefCommit: { commitId: "fork" } },
+      ]);
+      await expect(provider.targetMergedSinceIteration("3", "5")).resolves.toBe(false);
+    });
+
+    it.each([
+      ["an iteration is missing", [{ id: 5, commonRefCommit: { commitId: "x" } }]],
+      ["a merge base is missing", [{ id: 3 }, { id: 5, commonRefCommit: { commitId: "x" } }]],
+      ["a merge base is null", [{ id: 3, commonRefCommit: null }, { id: 5 }]],
+    ])("is null when %s", async (_label, value) => {
+      iterations(value);
+      await expect(provider.targetMergedSinceIteration("3", "5")).resolves.toBeNull();
+    });
+
+    it("throws when the iterations cannot be read, so the caller decides", async () => {
+      fetchSpy.mockResolvedValueOnce(mockFetchResponse({ message: "boom" }, false, 500));
+      await expect(provider.targetMergedSinceIteration("3", "5")).rejects.toThrow();
+    });
+  });
+
   describe("getDiff", () => {
     function mockPRAndIterations() {
       fetchSpy.mockResolvedValueOnce(

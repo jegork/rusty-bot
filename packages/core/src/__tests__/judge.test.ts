@@ -34,6 +34,7 @@ vi.mock("../agent/model.js", () => ({
   applyModelConstraints: vi.fn((_config, settings) => settings),
 }));
 
+const { buildPriorContextFromReview } = await import("../agent/prior-context.js");
 const { judgeFindings, judgeReviewResult, resolveJudgeConfig, buildFindingExcerpt } =
   await import("../agent/judge.js");
 
@@ -878,6 +879,18 @@ describe("judgeReviewResult below-threshold arbitration", () => {
     expect(result).not.toHaveProperty("arbitrationCandidates");
   });
 
+  it("carries a rejected candidate forward only as unconfirmed, and never a confirmed one", async () => {
+    const leak = makeFinding({ line: 2, message: "leaks secrets", voteCount: 1 });
+    const noise = makeFinding({ line: 3, message: "style nit", voteCount: 1 });
+    generateMock.mockResolvedValueOnce(evaluations(9, 2));
+
+    const result = await judgeReviewResult(makeElevatedReview([], [leak, noise]), PATCHES, JUDGE);
+    const next = buildPriorContextFromReview(result);
+
+    expect(next.findings.map((f) => f.message)).toEqual(["leaks secrets"]);
+    expect(next.unconfirmed?.map((c) => c.message)).toEqual(["style nit"]);
+  });
+
   it("clears the elevation when the judge rejects every candidate", async () => {
     const noise = makeFinding({ message: "style nit", voteCount: 1 });
     generateMock.mockResolvedValueOnce(evaluations(1));
@@ -1283,6 +1296,31 @@ describe("buildFindingExcerpt", () => {
   });
 });
 
+describe("judge rubric override", () => {
+  it("uses the caller's rubric instead of the below-threshold one", async () => {
+    generateMock.mockReset();
+    generateMock.mockResolvedValueOnce({
+      object: { evaluations: [{ index: 0, confidence: 9, reasoning: "ok" }] },
+      usage: { totalTokens: 30 },
+    });
+
+    await judgeFindings(
+      [makeFinding()],
+      PATCHES,
+      { enabled: true, threshold: 6 },
+      {
+        alreadyReported: [],
+        rubric: "\n\nCUSTOM RUBRIC",
+      },
+    );
+
+    const call = generateMock.mock.calls[0][0] as { system: { content: string }[] };
+    const system = call.system.map((m) => m.content).join("");
+    expect(system).toContain("CUSTOM RUBRIC");
+    expect(system).not.toContain("fewer reviewers than the consensus threshold");
+  });
+});
+
 describe("judge formatter", () => {
   it("inlines a per-finding excerpt and does not dump the full repo diff", async () => {
     generateMock.mockReset();
@@ -1300,6 +1338,45 @@ describe("judge formatter", () => {
     expect(userMessage).toContain("- **Diff context:**");
     expect(userMessage).toContain("## src/app.ts");
     expect(userMessage).not.toContain("## Diff under review");
+  });
+
+  it("shows each related location of a cross-file finding with its own excerpt", async () => {
+    generateMock.mockReset();
+    generateMock.mockResolvedValueOnce({
+      object: { evaluations: [{ index: 0, confidence: 9, reasoning: "ok" }] },
+      usage: { totalTokens: 30 },
+    });
+
+    const finding = makeFinding({
+      file: "ghost.ts",
+      line: 12,
+      relatedLocations: [
+        { file: "src/app.ts", line: 3 },
+        { file: "a.ts", line: 1 },
+        { file: "b.ts", line: 1 },
+        { file: "c.ts", line: 1 },
+      ],
+    });
+    await judgeFindings([finding], PATCHES, { enabled: true, threshold: 6 });
+
+    const userMessage = (generateMock.mock.calls[0][0] as { prompt: string }).prompt;
+    expect(userMessage).toContain("- **Related locations:** src/app.ts:3, a.ts:1, b.ts:1, c.ts:1");
+    expect(userMessage).toContain("- **Diff context at src/app.ts:3:**");
+    expect(userMessage).toContain("## src/app.ts");
+    // excerpts are capped; every location is still named above
+    expect(userMessage).toContain("- **Diff context at b.ts:1:**");
+    expect(userMessage).not.toContain("- **Diff context at c.ts:1:**");
+  });
+
+  it("adds no related section for a single-location finding", async () => {
+    generateMock.mockReset();
+    generateMock.mockResolvedValueOnce({
+      object: { evaluations: [{ index: 0, confidence: 9, reasoning: "ok" }] },
+      usage: { totalTokens: 30 },
+    });
+    await judgeFindings([makeFinding()], PATCHES, { enabled: true, threshold: 6 });
+    const userMessage = (generateMock.mock.calls[0][0] as { prompt: string }).prompt;
+    expect(userMessage).not.toContain("Related locations");
   });
 
   it("uses the not-found sentinel for findings whose file isn't in the patches", async () => {

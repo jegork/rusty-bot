@@ -268,6 +268,28 @@ describe("GitLabProvider", () => {
     });
   });
 
+  describe("getMergeBase", () => {
+    it("asks the merge_base endpoint with both refs encoded", async () => {
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ id: "base123", title: "x" }));
+
+      await expect(provider.getMergeBase("release/1.0", "abc")).resolves.toBe("base123");
+      const url = fetchSpy.mock.calls[0]?.[0] as string;
+      expect(url).toContain(
+        `/projects/${PROJECT_ENC}/repository/merge_base?refs[]=release%2F1.0&refs[]=abc`,
+      );
+    });
+
+    it("is null when the endpoint fails", async () => {
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ message: "404 Not found" }, false, 404));
+      await expect(provider.getMergeBase("main", "abc")).resolves.toBeNull();
+    });
+
+    it("is null when the response has no commit id", async () => {
+      fetchSpy.mockResolvedValueOnce(jsonResponse({}));
+      await expect(provider.getMergeBase("main", "abc")).resolves.toBeNull();
+    });
+  });
+
   describe("getLastReviewedSha", () => {
     it("walks notes newest-first and returns the embedded sha", async () => {
       fetchSpy.mockResolvedValueOnce(

@@ -1,9 +1,11 @@
 import type {
   PriorReviewContext,
   PriorReviewContextFinding,
+  PriorUnconfirmedConcern,
   ReviewResult,
   RiskAssessment,
 } from "../types.js";
+import { describesSameIssue } from "./cluster.js";
 
 const MARKER_PREFIX = "<!-- rusty-bot:context:";
 const MARKER_SUFFIX = " -->";
@@ -15,6 +17,9 @@ const SUMMARY_CHAR_CAP = 4_000;
 const FINDING_MESSAGE_CHAR_CAP = 250;
 const FINDINGS_COUNT_CAP = 50;
 const FILES_REVIEWED_COUNT_CAP = 100;
+const UNCONFIRMED_COUNT_CAP = 15;
+// a concern no run confirmed after this many more looks is retired
+const UNCONFIRMED_MAX_CARRIED_RUNS = 3;
 const TRUNCATED_SUFFIX = "\n\n[truncated]";
 const ELLIPSIS = "…";
 
@@ -39,7 +44,33 @@ function truncateSummary(summary: string): string {
   return summary.slice(0, SUMMARY_CHAR_CAP) + TRUNCATED_SUFFIX;
 }
 
-export function buildPriorContextFromReview(review: ReviewResult): PriorReviewContext {
+// this run's unpublished concerns first, then earlier ones still worth a look:
+// a concern this run published or raised again is no longer carried separately
+function carryUnconfirmed(
+  review: ReviewResult,
+  previous: PriorReviewContext | null | undefined,
+): PriorUnconfirmedConcern[] {
+  const fresh: PriorUnconfirmedConcern[] = (review.droppedFindings ?? []).map((d) => ({
+    file: d.file,
+    line: d.line,
+    severity: d.severity,
+    message: d.message,
+    carriedRuns: 0,
+  }));
+  const older = (previous?.unconfirmed ?? [])
+    .filter((c) => c.carriedRuns + 1 < UNCONFIRMED_MAX_CARRIED_RUNS)
+    .filter((c) => !review.findings.some((f) => describesSameIssue(f, c)))
+    .filter((c) => !fresh.some((f) => describesSameIssue(f, c)))
+    .map((c) => ({ ...c, carriedRuns: c.carriedRuns + 1 }));
+  return [...fresh, ...older].slice(0, UNCONFIRMED_COUNT_CAP);
+}
+
+/** `previous` is the context this run started from; only an incremental run passes it. */
+export function buildPriorContextFromReview(
+  review: ReviewResult,
+  previous?: PriorReviewContext | null,
+): PriorReviewContext {
+  const unconfirmed = carryUnconfirmed(review, previous);
   return {
     summary: review.summary,
     recommendation: review.recommendation,
@@ -51,6 +82,8 @@ export function buildPriorContextFromReview(review: ReviewResult): PriorReviewCo
     })),
     filesReviewed: review.filesReviewed,
     ...(review.riskAssessment ? { riskAssessment: review.riskAssessment } : {}),
+    ...(unconfirmed.length > 0 && { unconfirmed }),
+    incrementalRuns: previous ? (previous.incrementalRuns ?? 0) + 1 : 0,
   };
 }
 
@@ -80,6 +113,18 @@ export function encodePriorReviewContext(ctx: PriorReviewContext): string {
       ? { filesReviewed: ctx.filesReviewed.slice(0, FILES_REVIEWED_COUNT_CAP) }
       : {}),
     ...(ctx.riskAssessment ? { riskAssessment: truncateRiskAssessment(ctx.riskAssessment) } : {}),
+    ...(ctx.unconfirmed && ctx.unconfirmed.length > 0
+      ? {
+          unconfirmed: ctx.unconfirmed.slice(0, UNCONFIRMED_COUNT_CAP).map((c) => ({
+            file: c.file,
+            line: c.line,
+            severity: c.severity,
+            message: truncateMessage(c.message),
+            carriedRuns: c.carriedRuns,
+          })),
+        }
+      : {}),
+    ...(ctx.incrementalRuns !== undefined ? { incrementalRuns: ctx.incrementalRuns } : {}),
   };
   const json = JSON.stringify(truncated);
   const b64 = Buffer.from(json, "utf-8").toString("base64");
@@ -96,6 +141,12 @@ function isFinding(value: unknown): value is PriorReviewContextFinding {
     SEVERITIES.has(v.severity) &&
     typeof v.message === "string"
   );
+}
+
+function isUnconfirmedConcern(value: unknown): value is PriorUnconfirmedConcern {
+  if (!isFinding(value)) return false;
+  const carried = (value as unknown as Record<string, unknown>).carriedRuns;
+  return typeof carried === "number" && Number.isInteger(carried) && carried >= 0;
 }
 
 function isRiskAssessment(value: unknown): value is RiskAssessment {
@@ -133,6 +184,20 @@ function isContext(value: unknown): value is PriorReviewContext {
   }
   // same rule for the risk assessment: absent is fine, malformed means tampered
   if (v.riskAssessment !== undefined && !isRiskAssessment(v.riskAssessment)) return false;
+  if (
+    v.incrementalRuns !== undefined &&
+    !(
+      typeof v.incrementalRuns === "number" &&
+      Number.isInteger(v.incrementalRuns) &&
+      v.incrementalRuns >= 0
+    )
+  ) {
+    return false;
+  }
+  if (v.unconfirmed !== undefined) {
+    if (!Array.isArray(v.unconfirmed)) return false;
+    if (!v.unconfirmed.every(isUnconfirmedConcern)) return false;
+  }
   return true;
 }
 
@@ -168,4 +233,6 @@ export const PRIOR_CONTEXT_LIMITS = {
   findingMessageCharCap: FINDING_MESSAGE_CHAR_CAP,
   findingsCountCap: FINDINGS_COUNT_CAP,
   filesReviewedCountCap: FILES_REVIEWED_COUNT_CAP,
+  unconfirmedCountCap: UNCONFIRMED_COUNT_CAP,
+  unconfirmedMaxCarriedRuns: UNCONFIRMED_MAX_CARRIED_RUNS,
 } as const;

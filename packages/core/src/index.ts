@@ -28,6 +28,8 @@ export type {
   PostSummaryCommentOptions,
   PriorReviewContext,
   PriorReviewContextFinding,
+  PriorUnconfirmedConcern,
+  ReviewScope,
   TicketProvider,
   DroppedFinding,
   ConsensusMetadata,

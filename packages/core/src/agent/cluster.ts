@@ -75,6 +75,16 @@ export function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
   return intersection / union;
 }
 
+/** whether two findings would land in one cluster on their own: same file, nearby line, similar wording. */
+export function describesSameIssue(
+  a: Pick<Clusterable, "file" | "line" | "message">,
+  b: Pick<Clusterable, "file" | "line" | "message">,
+): boolean {
+  const { lineWindow, jaccard } = getClusterConfig();
+  if (a.file !== b.file || Math.abs(a.line - b.line) > lineWindow) return false;
+  return jaccardSimilarity(tokenize(a.message), tokenize(b.message)) >= jaccard;
+}
+
 function clusterItems<T extends Clusterable>(
   passResults: readonly (readonly T[])[],
 ): InternalCluster<T>[] {

@@ -54,6 +54,8 @@ export const FindingSchema = z.object({
 // extends LLM output with consensus pipeline metadata
 export type Finding = z.infer<typeof FindingSchema> & {
   voteCount?: number;
+  /** other places a cross-file design finding names, so the judge can check every one */
+  relatedLocations?: { file: string; line: number }[];
 };
 
 export const SkimFindingSchema = z.object({

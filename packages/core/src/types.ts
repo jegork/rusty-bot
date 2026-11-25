@@ -126,6 +126,24 @@ export interface ReviewResult extends ReviewOutput {
   scopeCreep?: ScopeCreepItem[];
   /** whole-PR risk assessment; only populated when `ReviewConfig.assessRisk` is on */
   riskAssessment?: RiskAssessment;
+  /** what the review covered and why; set by the CI pipeline for the summary */
+  reviewScope?: ReviewScope;
+  /** the whole-PR design consistency pass (RUSTY_DESIGN_PASS); absent when it did not run */
+  designPass?: {
+    /** findings the pass raised that sat on files of this PR */
+    raised: number;
+    /** of those, the ones the judge confirmed and that were added to `findings` */
+    published: number;
+    /** design pass plus its judge call */
+    tokenCount: number;
+  };
+}
+
+export interface ReviewScope {
+  /** "full" is the whole PR against its merge base; "incremental" only what changed since the last review */
+  mode: "full" | "incremental";
+  /** human-readable reason, rendered in the summary */
+  reason: string;
 }
 
 export interface ReviewConfig {
@@ -193,6 +211,17 @@ export interface PriorReviewContext {
   /** risk assessment of the prior pass, so an incremental re-review that only
    * sees the new diff cannot lower the PR-wide level below what was already seen */
   riskAssessment?: RiskAssessment;
+  /** concerns earlier runs raised but did not publish (below the consensus
+   * threshold, or not confirmed by arbitration), so a later run that sees
+   * more of the PR can confirm them. never treated as established issues */
+  unconfirmed?: PriorUnconfirmedConcern[];
+  /** incremental reviews since the last whole-PR review; drives the periodic full review */
+  incrementalRuns?: number;
+}
+
+export interface PriorUnconfirmedConcern extends PriorReviewContextFinding {
+  /** how many later runs have carried this concern without confirming it */
+  carriedRuns: number;
 }
 
 export interface Hunk {
@@ -268,6 +297,8 @@ export interface GitProvider {
   getLastReviewedSha?(): Promise<string | null>;
   /** fetch only the diff between an earlier sha and the current head; null if unreachable */
   getDiffSinceSha?(sinceSha: string, headSha: string): Promise<FilePatch[] | null>;
+  /** the merge base of two refs or shas; null when it cannot be resolved */
+  getMergeBase?(ref: string, otherRef: string): Promise<string | null>;
   /** read PR-wide context (summary + findings) embedded in a previously-posted summary comment, if any */
   getPriorReviewContext?(): Promise<PriorReviewContext | null>;
   /** PR labels, for platforms that have them; the risk policy reads the author's level from these */

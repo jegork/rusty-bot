@@ -99,6 +99,8 @@ export function iterationIncremental(provider: AzureDevOpsProvider): Incremental
     },
     getDiffSince: (lastReviewed) => provider.getDiffSinceIteration(lastReviewed),
     marker: (current) => ({ lastReviewedIteration: current }),
+    targetMergedSince: (lastReviewed, current) =>
+      provider.targetMergedSinceIteration(lastReviewed, current),
   };
 }
 

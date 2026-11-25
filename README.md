@@ -265,6 +265,7 @@ The CLI reads the same env vars as the other harnesses — `RUSTY_LLM_MODEL`, th
 | `RUSTY_JUDGE_ENABLED` | enable post-generation judge/filter pass | `false` |
 | `RUSTY_JUDGE_THRESHOLD` | minimum confidence score (0–10) to keep a finding | `6` |
 | `RUSTY_JUDGE_MODEL` | model for the judge (can be cheaper than reviewer) | same as `RUSTY_LLM_MODEL` |
+| `RUSTY_DESIGN_PASS` | when `true`, whole-PR reviews add one call that looks only for cross-file design problems; needs the judge. See [Design consistency pass](#design-consistency-pass) | `false` |
 | `RUSTY_LLM_TRIAGE_MODEL` | LLM model for triage classification (enables cascading) | — |
 | `RUSTY_CASCADE_ENABLED` | explicitly enable/disable cascading (`true`/`false`) | auto (enabled when triage model is set) |
 | `RUSTY_OPENGREP_RULES` | OpenGrep config string (ruleset or path to rule file) | `auto` |
@@ -631,6 +632,18 @@ RUSTY_JUDGE_MODEL=anthropic/claude-3-5-haiku-20241022  # optional, cheaper model
 
 When the judge is disabled (default), the pipeline behaves exactly as before with zero overhead.
 
+### Design consistency pass
+
+The per-chunk reviewers read a PR file by file, so they miss problems that only show with every file side by side. With `RUSTY_DESIGN_PASS=true`, every whole-PR review (the first review, and the periodic and post-merge ones described under [Incremental Review](#incremental-review)) adds one tool-less call over the whole PR diff that looks for five patterns only:
+
+- the same concern implemented several ways across the PR
+- non-trivial logic duplicated across changed files
+- helpers that take a scope argument (tenant, organization, user) but do not filter or write by it
+- flag parameters whose combinations include meaningless states
+- locks that protect nothing shared or are held across network or disk I/O
+
+Each finding has to name a concrete failure mode, and at most five are kept. They never publish on the pass's word alone: the judge rules on them with a rubric for uncorroborated findings, sees the existing findings so it rejects rewordings, and gets the diff excerpt of each location the finding names (up to 3). The pass does not run when the judge is disabled, and if the judge call fails nothing from the pass is published. Published findings start with `Design consistency:` and end with their failure mode, and the summary footer shows how many were raised and confirmed. Incremental runs skip the pass, since a delta hides the other copies. It uses the same model and settings as a single-pass review.
+
 ### Incremental Review
 
 When a PR gets new commits after a previous review, the bot only fetches the diff since the last reviewed commit (or PR iteration on Azure DevOps) instead of the full PR. To keep PR-wide context without paying for the full diff, the previous review's **summary**, **recommendation**, and **surfaced findings** are carried forward and shown to the agent as established background.
@@ -642,6 +655,7 @@ When a PR gets new commits after a previous review, the bot only fetches the dif
    - `<!-- rusty-bot:context:... -->` — base64-encoded JSON of the prior summary + findings (capped: 4 000-char summary, 50 findings, 250-char message each)
 2. On the next push, the bot reads both markers from its previous comment, fetches only the new diff, and injects a `## Prior review context` section into the agent's prompt. The agent is explicitly told its summary must describe the **whole** PR, not just the new diff.
 3. The prior-findings list is annotated as "do NOT re-raise unless this commit changes the underlying code", which suppresses duplicate findings across re-reviews.
+4. Concerns that did not get published (below the consensus threshold, or rejected by arbitration) are carried too, in a separate **unconfirmed concerns** list (at most 15, 250 chars each). The agent is told they are not established issues: it checks each one it can see and reports it as a finding only if it holds. A concern is retired once a later run publishes it, and after 3 more runs if none does. A full review starts the list over.
 
 **Caps and trade-offs:**
 
@@ -649,6 +663,15 @@ When a PR gets new commits after a previous review, the bot only fetches the dif
 - Carry-forward state is provider-side: it survives bot-comment cleanup because the markers are read **before** old comments are deleted on each run.
 - If a force-push or rebase makes the prior SHA unreachable, the bot transparently falls back to a full review — there is no fragile state.
 - Disable with `RUSTY_INCREMENTAL_REVIEW=false`; the bot then re-reviews the full PR every time and posts no carry-forward markers.
+
+**When a run reviews the whole PR anyway:**
+
+An incremental run only ever sees code in deltas, so code that arrived across several pushes is never seen side by side, and a merge of the target branch makes the delta full of code the PR never touched. So a run widens to the whole PR, diffed against its merge base, when:
+
+- the target branch was merged into the PR (or the PR rebased onto it) since the last review, seen as the PR's merge base moving. The merge-base diff leaves the target branch's own changes out, so they are never reviewed as PR code.
+- 5 incremental reviews ran in a row since the last whole-PR review.
+
+The summary states which scope ran and why (`**Review scope:** whole PR (main was merged in since the last review)`). Azure DevOps diffs the whole PR against the iteration's merge base rather than the target branch tip, so commits that landed on the target after the PR branched do not show up as the PR's deletions.
 
 ### LLM Request Timeouts
 
@@ -962,6 +985,14 @@ How it works:
 - Each review logs one event with `module: "codegraph"` and an `outcome` (`disabled`, `no-binary`, `approximate-checkout`, `index-failed`, `index-timeout`, `ready`), plus index time and file, symbol and edge counts.
 
 The tools stay off unless `RUSTY_CODEGRAPH=true`, even in the image that ships the binary; unset it or set it to anything else to turn them off.
+
+### Git History Tool
+
+Some problems are only visible in history: a migration that reuses the revision id of one that shipped and was reverted looks like a brand new file in the diff. When the CI checkout holds the target branch's full history, deep-review passes get a read-only `gitHistory` tool that runs `git log` on the target branch, by path or by an exact string (`git log -S`), including reverted commits and the reverts. It returns at most 20 commits with up to 10 changed files each, and never sees the PR's own commits.
+
+The default checkouts are shallow, and a shallow history would answer "no commits" for anything older than its boundary, so the tool is only offered when the checkout is not shallow and has `origin/<target>` (or a local `<target>` branch). Turn it on with `fetch-depth: 0` on `actions/checkout` (GitHub) or `fetchDepth: 0` on the `checkout` step (Azure Pipelines). There is no API fallback yet.
+
+When a chunk changes migration files (`migrations/`, `migrate/`, `alembic/versions/`, `prisma/migrations/`, Flyway `V<n>__*.sql`), its prompt also gets a short checklist: revision ids never reused or previously reverted, downgrades that still work after runtime seeding, nullability and backfill assumptions, external resources such as blobs left behind by cascading deletes, and merge migrations that only join heads.
 
 ### Ticket Integration
 

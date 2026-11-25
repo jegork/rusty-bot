@@ -622,6 +622,32 @@ describe("buildUserMessage with priorContext", () => {
     expect(msg).toContain("`src/auth.ts`:17 (critical) — missing csrf check");
   });
 
+  it("lists unconfirmed concerns apart from published issues, as claims to check", () => {
+    const msg = buildWithPriorContext({
+      ...priorContext,
+      unconfirmed: [
+        {
+          file: "app/models/org.py",
+          line: 40,
+          severity: "warning",
+          message: "org deletion leaves blobs",
+          carriedRuns: 1,
+        },
+      ],
+    });
+    const unconfirmedIdx = msg.indexOf("**Unconfirmed concerns from earlier reviews**");
+    expect(unconfirmedIdx).toBeGreaterThan(msg.indexOf("Issues already surfaced"));
+    expect(msg).toContain("NOT established issues");
+    expect(msg).toContain("- `app/models/org.py`:40 (warning): org deletion leaves blobs");
+    expect(msg.indexOf("## Diff")).toBeGreaterThan(unconfirmedIdx);
+  });
+
+  it("omits the unconfirmed section when there are none", () => {
+    expect(buildWithPriorContext({ ...priorContext, unconfirmed: [] })).not.toContain(
+      "Unconfirmed concerns",
+    );
+  });
+
   it("omits the issues list when prior context has no findings", () => {
     const msg = buildWithPriorContext({ ...priorContext, findings: [] });
     expect(msg).not.toContain("Issues already surfaced");

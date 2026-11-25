@@ -1,3 +1,4 @@
+import { applyDesignPass, isDesignPassEnabled } from "./agent/design-pass.js";
 import { runCascadeReview, runMultiCallReview } from "./agent/multi-call.js";
 import type { MultiCallReviewOptions } from "./agent/multi-call.js";
 import { buildPriorContextFromReview } from "./agent/prior-context.js";
@@ -14,6 +15,7 @@ import { formatMissingRiskLabelComment, formatRiskDisagreementComment } from "./
 import { logger } from "./logger.js";
 import { loadMcpServerConfigsFromEnv } from "./mcp/client.js";
 import { extractChangedFilePaths, runOpenGrep } from "./opengrep/runner.js";
+import { GitHistory } from "./repo/history.js";
 import { resolveRepoCheckout } from "./repo/resolve.js";
 import {
   fetchRepoConfig,
@@ -35,6 +37,7 @@ import type {
   PriorReviewContext,
   ReviewConfig,
   ReviewResult,
+  ReviewScope,
   RiskLevel,
   TicketInfo,
   TicketProvider,
@@ -107,6 +110,16 @@ export interface IncrementalStrategy {
   getDiffSince(lastReviewed: string, current: string | null): Promise<FilePatch[] | null>;
   /** summary comment options that record `current` as reviewed */
   marker(current: string): PostSummaryCommentOptions;
+  /**
+   * whether target-branch commits entered the PR between the two revisions (a
+   * merge of the target, or a rebase onto it), seen as the PR's merge base
+   * moving. null when it cannot be told; may throw.
+   */
+  targetMergedSince?(
+    lastReviewed: string,
+    current: string,
+    metadata: PRMetadata,
+  ): Promise<boolean | null>;
 }
 
 export function headShaIncremental(provider: GitProvider): IncrementalStrategy {
@@ -126,7 +139,77 @@ export function headShaIncremental(provider: GitProvider): IncrementalStrategy {
       return (await provider.getDiffSinceSha?.(lastReviewed, current)) ?? null;
     },
     marker: (current) => ({ lastReviewedSha: current }),
+    async targetMergedSince(lastReviewed, current, metadata) {
+      if (!provider.getMergeBase) return null;
+      const [before, after] = await Promise.all([
+        provider.getMergeBase(metadata.targetBranch, lastReviewed),
+        provider.getMergeBase(metadata.targetBranch, current),
+      ]);
+      return before && after ? before !== after : null;
+    },
   };
+}
+
+// incremental runs after which the next run reviews the whole PR, so code that
+// arrived across several pushes is seen side by side at least this often
+const FULL_REVIEW_EVERY = 5;
+
+interface ResolvedScope {
+  scope: ReviewScope;
+  patches: FilePatch[];
+}
+
+async function detectTargetMerge(
+  incremental: IncrementalStrategy,
+  lastReviewed: string,
+  current: string | null,
+  metadata: PRMetadata,
+): Promise<boolean> {
+  if (!current || !incremental.targetMergedSince) return false;
+  try {
+    const merged = await incremental.targetMergedSince(lastReviewed, current, metadata);
+    if (merged === null) {
+      log.info({ lastReviewed, current }, "could not tell whether the target branch was merged in");
+    }
+    return merged === true;
+  } catch (err) {
+    log.warn({ err }, "failed to check for a target branch merge; treating the delta as PR code");
+    return false;
+  }
+}
+
+async function resolveReviewScope(
+  platform: ReviewPlatform,
+  metadata: PRMetadata,
+  lastReviewed: string | null,
+  current: string | null,
+  priorContext: PriorReviewContext | null,
+): Promise<ResolvedScope> {
+  const { provider, incremental } = platform;
+  const full = async (reason: string): Promise<ResolvedScope> => ({
+    scope: { mode: "full", reason },
+    patches: await provider.getDiff(),
+  });
+
+  if (!lastReviewed) {
+    return full(platform.incrementalReview ? "first review" : "incremental review is off");
+  }
+
+  const priorRuns = priorContext?.incrementalRuns ?? 0;
+  if (priorRuns >= FULL_REVIEW_EVERY) {
+    return full(`${priorRuns} incremental reviews since the last whole-PR review`);
+  }
+
+  const delta = await incremental.getDiffSince(lastReviewed, current);
+  if (!delta) return full("the changes since the last review could not be computed");
+
+  // a delta after a target merge carries the target's own changes, which are
+  // not this PR's code; the merge-base diff of the whole PR leaves them out
+  if (await detectTargetMerge(incremental, lastReviewed, current, metadata)) {
+    return full(`${metadata.targetBranch} was merged in since the last review`);
+  }
+
+  return { scope: { mode: "incremental", reason: "re-review of new commits" }, patches: delta };
 }
 
 /** everything that differs between one CI platform and another. */
@@ -334,6 +417,9 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
     headSha: metadata.headSha,
     fetchAuthHeader: platform.fetchAuthHeader,
   });
+  const gitHistory = checkout
+    ? await GitHistory.resolve(checkout.repoPath, metadata.targetBranch)
+    : null;
   const fetchSourceFile = (path: string) =>
     checkout ? checkout.readFile(path) : provider.getFileContent(path, metadata.sourceBranch);
 
@@ -375,12 +461,15 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
 
   await provider.deleteExistingBotComments();
 
-  const delta = lastReviewed ? await incremental.getDiffSince(lastReviewed, current) : null;
-  const incrementalUsed = delta !== null;
-  if (delta) {
-    log.info({ lastReviewed, current, files: delta.length }, "running incremental review");
-  }
-  const rawPatches = delta ?? (await provider.getDiff());
+  const { scope, patches: rawPatches } = await resolveReviewScope(
+    platform,
+    metadata,
+    lastReviewed,
+    current,
+    priorContext,
+  );
+  const incrementalUsed = scope.mode === "incremental";
+  log.info({ lastReviewed, current, files: rawPatches.length, ...scope }, "resolved review scope");
 
   const reviewable = filterFiles(rawPatches, config.ignorePatterns);
   log.info(
@@ -398,10 +487,12 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
       { lastReviewed, current },
       "no reviewable changes in incremental delta, skipping LLM review",
     );
-    await provider.postSummaryComment(
-      "No reviewable changes since the last review.",
-      incremental.marker(current),
-    );
+    // the old summary holding the context marker was just deleted, so the
+    // context travels on unchanged or the next run would start from nothing
+    await provider.postSummaryComment("No reviewable changes since the last review.", {
+      ...incremental.marker(current),
+      ...(priorContext && { priorContext }),
+    });
     // the gate applies on every run; the old reminder was closed above with the other bot threads
     return (await enforceRiskLabel(provider, risk, authorRisk)) ? 0 : 1;
   }
@@ -433,7 +524,7 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
 
   const skills = await discoverSkills(provider, metadata.targetBranch, repoConfig?.skills);
 
-  const review = await runTriagedReview({
+  let review = await runTriagedReview({
     patches: reviewable,
     config,
     metadata,
@@ -444,6 +535,7 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
       provider,
       sourceRef: metadata.sourceBranch,
       checkout: checkout ?? undefined,
+      ...(gitHistory && { gitHistory }),
       languageSummary,
       mcpServers,
       maxTokens: platform.maxTokens,
@@ -452,6 +544,11 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
     },
   });
 
+  // only a whole-PR review sees every file side by side; a delta would hide the other copies
+  if (scope.mode === "full" && isDesignPassEnabled()) {
+    review = await applyDesignPass(review, reviewable, metadata, platform.maxTokens);
+  }
+  review.reviewScope = scope;
   review.openGrepStats = {
     available: openGrepResult.available,
     findingCount: openGrepResult.rawCount,
@@ -484,7 +581,10 @@ export async function runPrReview(platform: ReviewPlatform): Promise<number> {
   await provider.postSummaryComment(
     formatSummaryComment(review, { ticketResolution, authorRiskLevel }),
     current
-      ? { ...incremental.marker(current), priorContext: buildPriorContextFromReview(review) }
+      ? {
+          ...incremental.marker(current),
+          priorContext: buildPriorContextFromReview(review, incrementalUsed ? priorContext : null),
+        }
       : undefined,
   );
   await postInlineFindings(provider, review, reviewable);

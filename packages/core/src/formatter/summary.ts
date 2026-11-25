@@ -214,6 +214,13 @@ export function formatSummaryComment(
   );
   lines.push("");
 
+  if (review.reviewScope) {
+    const covered =
+      review.reviewScope.mode === "full" ? "whole PR" : "changes since the last review";
+    lines.push(`**Review scope:** ${covered} (${review.reviewScope.reason})`);
+    lines.push("");
+  }
+
   if (review.riskAssessment) {
     lines.push(buildRiskSection(review.riskAssessment, options?.authorRiskLevel));
   }
@@ -402,6 +409,11 @@ export function formatSummaryComment(
     if (cm.degraded) {
       parts.push("degraded — judge filtering only");
     }
+  }
+  if (review.designPass) {
+    parts.push(
+      `design pass: ${review.designPass.published} of ${review.designPass.raised} confirmed · ${review.designPass.tokenCount} tokens`,
+    );
   }
   if (review.openGrepStats?.available && review.openGrepStats.findingCount > 0) {
     parts.push(`opengrep: ${review.openGrepStats.findingCount} pre-scan findings`);

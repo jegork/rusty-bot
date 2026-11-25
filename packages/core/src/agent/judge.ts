@@ -146,12 +146,33 @@ Every finding below was raised by fewer reviewers than the consensus threshold r
 export interface ArbitrationOptions {
   /** findings already being published, so a reworded duplicate can be rejected */
   alreadyReported: readonly Finding[];
+  /** replaces the below-threshold rubric, for uncorroborated findings from another source */
+  rubric?: string;
 }
 
 function formatAlreadyReported(findings: readonly Finding[]): string {
   if (findings.length === 0) return "";
   const lines = findings.map((f) => `- ${f.file}:${f.line} — ${f.message}`);
   return `\n## Already reported (do not evaluate)\n\n${lines.join("\n")}\n`;
+}
+
+const RELATED_EXCERPT_CAP = 3;
+
+// a design finding spans files (the same concern solved two ways), and is only
+// checkable with each place it names in view
+function formatRelatedLocations(f: Finding, patches: readonly FilePatch[]): string[] {
+  const related = f.relatedLocations ?? [];
+  if (related.length === 0) return [];
+  const parts = [
+    `- **Related locations:** ${related.map((l) => `${l.file}:${l.line}`).join(", ")}`,
+  ];
+  for (const loc of related.slice(0, RELATED_EXCERPT_CAP)) {
+    const excerpt = buildFindingExcerpt(patches, { ...f, ...loc, endLine: null });
+    parts.push(
+      `- **Diff context at ${loc.file}:${loc.line}:**\n${wrapUntrusted("diff-context", excerpt)}`,
+    );
+  }
+  return parts;
 }
 
 function formatFindingsForJudge(
@@ -175,6 +196,7 @@ function formatFindingsForJudge(
     parts.push(
       `- **Diff context:**\n${wrapUntrusted("diff-context", buildFindingExcerpt(patches, f))}`,
     );
+    parts.push(...formatRelatedLocations(f, patches));
     parts.push("");
   }
 
@@ -275,7 +297,7 @@ export async function judgeFindings(
     const response = await generateStructured({
       modelConfig,
       system: arbitration
-        ? JUDGE_SYSTEM_PROMPT + arbitrationRubric(config.threshold)
+        ? JUDGE_SYSTEM_PROMPT + (arbitration.rubric ?? arbitrationRubric(config.threshold))
         : JUDGE_SYSTEM_PROMPT,
       prompt: userMessage,
       schema: JudgeOutputSchema,

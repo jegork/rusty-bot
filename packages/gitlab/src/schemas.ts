@@ -51,6 +51,10 @@ export const GitLabRepositoryCompareSchema = z.object({
   diffs: z.array(GitLabDiffEntrySchema).optional(),
 });
 
+export const GitLabCommitRefSchema = z.object({
+  id: z.string(),
+});
+
 export const GitLabNoteSchema = z.object({
   id: z.number(),
   body: z.string().nullable().optional(),

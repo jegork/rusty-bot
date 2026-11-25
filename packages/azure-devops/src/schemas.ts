@@ -26,14 +26,18 @@ export const AdoPullRequestSchema = z.object({
     .optional(),
 });
 
+const AdoCommitRefSchema = z
+  .object({
+    commitId: z.string(),
+  })
+  .nullable()
+  .optional();
+
 export const AdoIterationSchema = z.object({
   id: z.number(),
-  sourceRefCommit: z
-    .object({
-      commitId: z.string(),
-    })
-    .nullable()
-    .optional(),
+  sourceRefCommit: AdoCommitRefSchema,
+  /** the merge base of source and target when the iteration was pushed */
+  commonRefCommit: AdoCommitRefSchema,
 });
 
 export const AdoIterationsSchema = z.object({

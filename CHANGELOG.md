@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.0](https://github.com/jegork/rusty-bot/compare/v1.22.0...v1.23.0) (2026-11-25)
+
+
+### Features
+
+* review whole PRs after target merges and carry unconfirmed concerns forward ([#225](https://github.com/jegork/rusty-bot/issues/225)) ([0e2f797](https://github.com/jegork/rusty-bot/commit/0e2f7973968976cdf7fcd05deb320afee352b99d))
+
 ## [1.22.0](https://github.com/jegork/rusty-bot/compare/v1.21.0...v1.22.0) (2026-11-25)
 
 

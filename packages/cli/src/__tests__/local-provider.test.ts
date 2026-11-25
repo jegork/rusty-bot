@@ -185,6 +185,51 @@ describe("LocalGitProvider (integration)", () => {
     });
   });
 
+  describe("listDirectory", () => {
+    async function commitSkillsOnFeature() {
+      await git(repo.path, ["checkout", "feature", "--quiet"]);
+      await mkdir(join(repo.path, ".skills/migrations"), { recursive: true });
+      await writeFile(
+        join(repo.path, ".skills/migrations/SKILL.md"),
+        "---\nname: migrations\n---\n",
+      );
+      await writeFile(join(repo.path, ".skills/README.md"), "readme\n");
+      await git(repo.path, ["add", "."]);
+      await git(repo.path, ["commit", "-m", "add skills", "--quiet"]);
+      await git(repo.path, ["checkout", "main", "--quiet"]);
+    }
+
+    function provider() {
+      return new LocalGitProvider({ repoPath: repo.path, baseRef: "main", headRef: "feature" });
+    }
+
+    it("lists a folder on a ref other than the working tree", async () => {
+      await commitSkillsOnFeature();
+      // an uncommitted folder in the working tree (on main) must not leak into the listing
+      await mkdir(join(repo.path, ".skills/working-tree-only"), { recursive: true });
+      await writeFile(join(repo.path, ".skills/working-tree-only/SKILL.md"), "x\n");
+
+      expect(await provider().listDirectory(".skills", "feature")).toEqual([
+        { name: "README.md", type: "file" },
+        { name: "migrations", type: "dir" },
+      ]);
+    });
+
+    it("returns null when the folder does not exist on the ref", async () => {
+      await commitSkillsOnFeature();
+
+      expect(await provider().listDirectory(".skills", "main")).toBeNull();
+    });
+
+    it("returns null when the path is a file, not a folder", async () => {
+      expect(await provider().listDirectory("a.ts", "main")).toBeNull();
+    });
+
+    it("throws when the ref does not exist", async () => {
+      await expect(provider().listDirectory(".skills", "no-such-ref")).rejects.toThrow();
+    });
+  });
+
   describe("searchCode", () => {
     it("returns file/line/content rows for matching tracked content", async () => {
       const provider = new LocalGitProvider({

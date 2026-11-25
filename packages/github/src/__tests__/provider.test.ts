@@ -109,6 +109,67 @@ describe("GitHubProvider", () => {
     });
   });
 
+  describe("listDirectory", () => {
+    function contentsEntry(name: string, type: string) {
+      const path = `.skills/${name}`;
+      return {
+        type,
+        size: type === "file" ? 120 : 0,
+        name,
+        path,
+        sha: "3be22be77da4887e869c981806d8452f034dd014",
+        url: `https://api.github.com/repos/${OWNER}/${REPO}/contents/${path}?ref=main`,
+        git_url: `https://api.github.com/repos/${OWNER}/${REPO}/git/trees/3be22be7`,
+        html_url: `https://github.com/${OWNER}/${REPO}/tree/main/${path}`,
+        download_url: type === "file" ? `https://raw.githubusercontent.com/${path}` : null,
+        _links: { self: "", git: "", html: "" },
+      };
+    }
+
+    function requestError(status: number) {
+      return Object.assign(new Error(`HTTP ${status}`), { status });
+    }
+
+    it("returns child dirs and files of a folder on the given ref", async () => {
+      octokit.request.mockResolvedValueOnce({
+        data: [
+          contentsEntry("migrations", "dir"),
+          contentsEntry("README.md", "file"),
+          contentsEntry("vendored", "submodule"),
+        ],
+      });
+
+      expect(await provider.listDirectory(".skills", "main")).toEqual([
+        { name: "migrations", type: "dir" },
+        { name: "README.md", type: "file" },
+      ]);
+      expect(octokit.request).toHaveBeenCalledWith(
+        "GET /repos/{owner}/{repo}/contents/{path}",
+        expect.objectContaining({ owner: OWNER, repo: REPO, path: ".skills", ref: "main" }),
+      );
+    });
+
+    it("returns null when the path does not exist", async () => {
+      octokit.request.mockRejectedValueOnce(requestError(404));
+
+      expect(await provider.listDirectory(".skills", "main")).toBeNull();
+    });
+
+    it("returns null when the path is a file, not a folder", async () => {
+      octokit.request.mockResolvedValueOnce({ data: contentsEntry("SKILL.md", "file") });
+
+      expect(await provider.listDirectory(".skills/SKILL.md", "main")).toBeNull();
+    });
+
+    it("throws on a transport error", async () => {
+      octokit.request.mockRejectedValueOnce(requestError(500));
+
+      await expect(provider.listDirectory(".skills", "main")).rejects.toMatchObject({
+        status: 500,
+      });
+    });
+  });
+
   describe("getPRMetadata", () => {
     it("maps github response to PRMetadata", async () => {
       octokit.request.mockResolvedValueOnce({

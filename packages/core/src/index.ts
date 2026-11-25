@@ -35,6 +35,7 @@ export type {
   RiskLevel,
   RiskAxes,
   RiskAssessment,
+  DirectoryEntry,
 } from "./types.js";
 
 export {
@@ -66,7 +67,15 @@ export {
   REPO_CONFIG_FILENAME,
   type RepoConfig,
   type RiskPolicy,
+  type SkillSettings,
 } from "./repo-config.js";
+export {
+  discoverSkills,
+  renderSkillsListing,
+  type RepoSkill,
+  type SkillIndex,
+  type SkillsListing,
+} from "./skills.js";
 export * from "./analysis/raw-findings.js";
 export * from "./repo/index.js";
 export {
